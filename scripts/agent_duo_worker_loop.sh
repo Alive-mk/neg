@@ -8,6 +8,7 @@ ITERATIONS="${NEG_AGENT_ITERATIONS:-1}"
 MAX_REVISIONS="${NEG_AGENT_MAX_REVISIONS:-2}"
 SLEEP_SECONDS="${NEG_AGENT_SLEEP_SECONDS:-30}"
 CODEX_BIN="${CODEX_BIN:-codex}"
+CODEX_TIMEOUT_SECONDS="${NEG_AGENT_CODEX_TIMEOUT_SECONDS:-900}"
 
 WORKTREES="$STATE/worker-worktrees"
 REVIEWS="$STATE/reviews"
@@ -39,7 +40,7 @@ codex_exec() {
     extra_args=(${NEG_CODEX_EXTRA_ARGS})
   fi
 
-  "$CODEX_BIN" exec \
+  timeout "$CODEX_TIMEOUT_SECONDS" "$CODEX_BIN" exec \
     -C "$worktree" \
     --sandbox workspace-write \
     "${extra_args[@]}" \

@@ -6,6 +6,7 @@ STATE="${NEG_AGENT_STATE:-/tmp/neg-agent-duo}"
 ITERATIONS="${NEG_AGENT_ITERATIONS:-forever}"
 SLEEP_SECONDS="${NEG_AGENT_SLEEP_SECONDS:-30}"
 CODEX_BIN="${CODEX_BIN:-codex}"
+CODEX_TIMEOUT_SECONDS="${NEG_AGENT_CODEX_TIMEOUT_SECONDS:-900}"
 
 JUDGE_WORKTREES="$STATE/judge-worktrees"
 LOGS="$STATE/logs"
@@ -33,7 +34,7 @@ codex_exec() {
     extra_args=(${NEG_CODEX_EXTRA_ARGS})
   fi
 
-  "$CODEX_BIN" exec \
+  timeout "$CODEX_TIMEOUT_SECONDS" "$CODEX_BIN" exec \
     -C "$worktree" \
     --sandbox workspace-write \
     "${extra_args[@]}" \
