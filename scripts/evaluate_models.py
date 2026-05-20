@@ -12,10 +12,14 @@ from neg_blindness.evaluation import aggregate_results, evaluate_record
 from neg_blindness.io_utils import load_records, write_json
 
 
-def main() -> None:
+def build_parser(
+    *,
+    input_required: bool = True,
+    default_input: str | None = None,
+) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--models", required=True)
-    parser.add_argument("--input", required=True)
+    parser.add_argument("--input", required=input_required, default=default_input)
     parser.add_argument("--output", required=True)
     parser.add_argument("--cache-dir", default="outputs/score_cache")
     parser.add_argument("--model-names", nargs="*")
@@ -30,7 +34,17 @@ def main() -> None:
         action="store_true",
         help="Count record.valid_negatives as correct for select_gold_neg records.",
     )
-    args = parser.parse_args()
+    return parser
+
+
+def main(
+    argv: list[str] | None = None,
+    *,
+    input_required: bool = True,
+    default_input: str | None = None,
+) -> None:
+    parser = build_parser(input_required=input_required, default_input=default_input)
+    args = parser.parse_args(argv)
 
     _AUTO_TOKENS = {
         "suppress_target":   "[SUPPRESS]",
