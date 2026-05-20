@@ -72,12 +72,16 @@ python scripts/split_dataset.py \
 评测模型：
 
 ```bash
-python scripts/evaluate_models.py \
+python scripts/eval_clean_strict.py \
   --models configs/model_config.json \
   --input data/processed/splits/test.jsonl \
   --output outputs/eval_test.json \
   --cache-dir outputs/score_cache
 ```
+
+`scripts/eval_clean_strict.py` 是 `scripts/evaluate_models.py` 的薄 wrapper；默认不启用
+`--use-multi-answer-negatives`，因此 `NegRankAcc` 保持 hard single-gold 口径。若要报告
+SELECT 多答案口径，需要显式加 `--use-multi-answer-negatives` 或用对应 reaggregation 脚本。
 
 导出 E4v3 release 格式：
 
