@@ -1,0 +1,2 @@
+{"id":"select-hard-correct","expected_neg_behavior":"select_gold_neg","semantic_mode":"exclusive_choice","scope_type":"in_scope","gold_neg":["Germany"],"valid_negatives":[]}
+{"id":"select-valid-negative","expected_neg_behavior":"select_gold_neg","semantic_mode":"exclusive_choice","scope_type":"in_scope","gold_neg":["Germany"],"valid_negatives":["Japan"]}

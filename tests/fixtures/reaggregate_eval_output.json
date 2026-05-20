@@ -1,0 +1,31 @@
+{
+  "fixture_model": {
+    "summary": {},
+    "per_record": [
+      {
+        "id": "select-hard-correct",
+        "expected_neg_behavior": "select_gold_neg",
+        "pos_correct": true,
+        "neg_best": "Germany",
+        "neg_correct": true,
+        "neg_rank_correct": true,
+        "flip_required": true,
+        "flip_correct": true,
+        "preserve_positive": false,
+        "over_negation": false
+      },
+      {
+        "id": "select-valid-negative",
+        "expected_neg_behavior": "select_gold_neg",
+        "pos_correct": true,
+        "neg_best": "Japan",
+        "neg_correct": false,
+        "neg_rank_correct": false,
+        "flip_required": true,
+        "flip_correct": false,
+        "preserve_positive": false,
+        "over_negation": false
+      }
+    ]
+  }
+}
