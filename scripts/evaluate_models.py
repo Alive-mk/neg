@@ -12,8 +12,19 @@ from neg_blindness.evaluation import aggregate_results, evaluate_record
 from neg_blindness.io_utils import load_records, write_json
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
+_AUTO_TOKENS = {
+    "suppress_target": "[SUPPRESS]",
+    "select_gold_neg": "[SELECT]",
+    "preserve_positive": "[PRESERVE]",
+}
+
+
+def build_parser(
+    description: str | None = None,
+    *,
+    include_multi_answer_flag: bool = True,
+) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=description)
     parser.add_argument("--models", required=True)
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
@@ -25,28 +36,34 @@ def main() -> None:
              "Use 'auto' to pick [SUPPRESS]/[SELECT]/[PRESERVE] from expected_neg_behavior, "
              "or a fixed string like '[SUPPRESS]' for out-of-domain sets (e.g. WikiFact).",
     )
-    parser.add_argument(
-        "--use-multi-answer-negatives",
-        action="store_true",
-        help="Count record.valid_negatives as correct for select_gold_neg records.",
-    )
-    args = parser.parse_args()
+    if include_multi_answer_flag:
+        parser.add_argument(
+            "--use-multi-answer-negatives",
+            action="store_true",
+            help="Count record.valid_negatives as correct for select_gold_neg records.",
+        )
+    return parser
 
-    _AUTO_TOKENS = {
-        "suppress_target":   "[SUPPRESS]",
-        "select_gold_neg":   "[SELECT]",
-        "preserve_positive": "[PRESERVE]",
-    }
 
+def run_evaluation(
+    *,
+    models: str,
+    input_path: str,
+    output_path: str,
+    cache_dir: str = "outputs/score_cache",
+    model_names: list[str] | None = None,
+    neg_prefix: str = "",
+    use_multi_answer_negatives: bool = False,
+) -> None:
     def resolve_prefix(record) -> str:
-        if args.neg_prefix == "auto":
+        if neg_prefix == "auto":
             return _AUTO_TOKENS.get(record.expected_neg_behavior, "")
-        return args.neg_prefix
+        return neg_prefix
 
-    configs = load_model_configs(args.models)
-    records = load_records(args.input)
+    configs = load_model_configs(models)
+    records = load_records(input_path)
 
-    selected_names = args.model_names or list(configs.keys())
+    selected_names = model_names or list(configs.keys())
     selected_names = [
         name
         for name in selected_names
@@ -57,14 +74,14 @@ def main() -> None:
     output: dict[str, dict] = {}
     for model_name in selected_names:
         config = configs[model_name]
-        cache = ScoreCache(args.cache_dir, model_name)
+        cache = ScoreCache(cache_dir, model_name)
         per_record = [
             evaluate_record(
                 record,
                 config,
                 cache=cache,
                 neg_prefix=resolve_prefix(record),
-                use_multi_answer_negatives=args.use_multi_answer_negatives,
+                use_multi_answer_negatives=use_multi_answer_negatives,
             )
             for record in records
         ]
@@ -73,7 +90,21 @@ def main() -> None:
             "per_record": per_record,
         }
 
-    write_json(args.output, output)
+    write_json(output_path, output)
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+    run_evaluation(
+        models=args.models,
+        input_path=args.input,
+        output_path=args.output,
+        cache_dir=args.cache_dir,
+        model_names=args.model_names,
+        neg_prefix=args.neg_prefix,
+        use_multi_answer_negatives=args.use_multi_answer_negatives,
+    )
 
 
 if __name__ == "__main__":
