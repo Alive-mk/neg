@@ -1,0 +1,30 @@
+{
+  "factual": [
+    "country and capital",
+    "scientist and discovery",
+    "city and landmark",
+    "historical figure and role",
+    "animal and habitat"
+  ],
+  "commonsense": [
+    "daily actions",
+    "kitchen tools",
+    "weather effects",
+    "transportation",
+    "school routines"
+  ],
+  "lexical": [
+    "antonyms",
+    "attribute descriptions",
+    "category membership",
+    "object affordance",
+    "physical properties"
+  ],
+  "instructional": [
+    "task completion steps",
+    "safety instructions",
+    "office workflow",
+    "travel planning",
+    "household maintenance"
+  ]
+}

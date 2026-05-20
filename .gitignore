@@ -1,0 +1,37 @@
+# Python/cache
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Local environments
+.venv/
+venv/
+env/
+.env
+.env.*
+
+# Local editor/agent state
+.claude/
+.codex
+
+# Large/local artifacts
+model/
+outputs/
+
+# Optional generated data. Keep dataset metadata and scripts in git;
+# force-add selected small data files only when intentionally publishing them.
+data/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+
+# OS files
+.DS_Store

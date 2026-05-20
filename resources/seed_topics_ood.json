@@ -1,0 +1,30 @@
+{
+  "factual": [
+    "chemical elements and properties",
+    "mathematical concepts",
+    "medical terms and treatments",
+    "literary works and authors",
+    "sports records and athletes"
+  ],
+  "commonsense": [
+    "legal rules and exceptions",
+    "nutrition and food",
+    "emergency procedures",
+    "engineering principles",
+    "environmental phenomena"
+  ],
+  "lexical": [
+    "technical synonyms",
+    "degree and quantity adjectives",
+    "cause-effect relations",
+    "spatial prepositions",
+    "temporal expressions"
+  ],
+  "instructional": [
+    "medical dosage and contraindications",
+    "laboratory safety protocols",
+    "financial regulations",
+    "programming best practices",
+    "construction guidelines"
+  ]
+}

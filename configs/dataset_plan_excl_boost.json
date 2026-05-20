@@ -1,0 +1,31 @@
+{
+  "target_examples": 150,
+  "batch_size": 5,
+  "max_retries_per_batch": 4,
+  "generation_model": "generator",
+  "verifier_model": "verifier",
+  "semantic_mode_mix": {
+    "exclusive_choice": 1.0
+  },
+  "scope_weights": {
+    "in_scope": 1.0
+  },
+  "neg_types": [
+    "verb",
+    "noun",
+    "adverb",
+    "sentential"
+  ],
+  "scope_types": [
+    "in_scope"
+  ],
+  "domains": [
+    "factual",
+    "commonsense",
+    "lexical",
+    "instructional"
+  ],
+  "seed_topics_path": "resources/seed_topics.json",
+  "verifier_threshold": 0.7,
+  "random_seed": 777
+}

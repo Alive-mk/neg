@@ -1,0 +1,48 @@
+{
+  "models": [
+    {
+      "name": "generator",
+      "endpoint": "https://api.ai-gaochao.cn/v1/chat/completions",
+      "model": "gpt-4.1-mini",
+      "api_key_env": "NEG_OPENAI_API_KEY",
+      "mode": "chat_json",
+      "timeout_sec": 120,
+      "temperature": 0.7,
+      "max_tokens": 2400
+    },
+    {
+      "name": "verifier",
+      "endpoint": "https://api.ai-gaochao.cn/v1/chat/completions",
+      "model": "gpt-4.1-mini",
+      "api_key_env": "NEG_OPENAI_API_KEY",
+      "mode": "chat_json",
+      "timeout_sec": 120,
+      "temperature": 0.0,
+      "max_tokens": 1200
+    },
+    {
+      "name": "llama_3_1_8b",
+      "mode": "hf_local",
+      "model_path": "/data/share/neg/model/Meta-Llama-3.1-8B",
+      "device_map": "auto",
+      "torch_dtype": "auto",
+      "trust_remote_code": false
+    },
+    {
+      "name": "mistral_7b_instruct_v0_3",
+      "mode": "hf_local",
+      "model_path": "/data/share/neg/model/Mistral-7B-Instruct-v0.3",
+      "device_map": "auto",
+      "torch_dtype": "auto",
+      "trust_remote_code": false
+    },
+    {
+      "name": "qwen2_5_7b",
+      "mode": "hf_local",
+      "model_path": "/data/mingkai/neg/model/Qwen2.5-7B",
+      "device_map": "cuda:0",
+      "torch_dtype": "float16",
+      "trust_remote_code": false
+    }
+  ]
+}

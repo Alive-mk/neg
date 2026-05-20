@@ -1,0 +1,50 @@
+{
+  "factual": [
+    "planet and property",
+    "language and country",
+    "sport and equipment",
+    "musical instrument and family",
+    "element and symbol",
+    "river and continent",
+    "invention and inventor",
+    "currency and country",
+    "organ and function",
+    "mountain and range"
+  ],
+  "commonsense": [
+    "cooking methods",
+    "sleeping habits",
+    "exercise routines",
+    "shopping behavior",
+    "hygiene practices",
+    "social etiquette",
+    "pet care",
+    "gardening actions",
+    "emergency procedures",
+    "reading habits"
+  ],
+  "lexical": [
+    "material properties",
+    "spatial relations",
+    "temporal relations",
+    "degree modifiers",
+    "part-whole relations",
+    "cause and effect",
+    "agent and instrument",
+    "color and object",
+    "size comparisons",
+    "texture descriptions"
+  ],
+  "instructional": [
+    "medical first aid",
+    "cooking recipes",
+    "software installation",
+    "vehicle maintenance",
+    "public transport usage",
+    "library procedures",
+    "laboratory safety",
+    "sports rules",
+    "financial transactions",
+    "event planning"
+  ]
+}

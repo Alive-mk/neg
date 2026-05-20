@@ -1,0 +1,74 @@
+{
+  "models": [
+    {
+      "name": "qwen_base",
+      "mode": "hf_local",
+      "model_path": "/data/mingkai/neg/model/Qwen2.5-7B",
+      "device_map": "auto",
+      "torch_dtype": "float16",
+      "trust_remote_code": false
+    },
+    {
+      "name": "qwen_dpo",
+      "mode": "hf_local",
+      "model_path": "/data/mingkai/neg/model/Qwen2.5-7B",
+      "adapter_path": "outputs/qwen_dpo_baseline/adapter",
+      "device_map": "auto",
+      "torch_dtype": "float16",
+      "trust_remote_code": false
+    },
+    {
+      "name": "qwen_nc_sft",
+      "mode": "hf_local",
+      "model_path": "/data/mingkai/neg/model/Qwen2.5-7B",
+      "adapter_path": "outputs/qwen_nc_sft/adapter",
+      "device_map": "auto",
+      "torch_dtype": "float16",
+      "trust_remote_code": false
+    },
+    {
+      "name": "qwen_mgnm",
+      "mode": "hf_local",
+      "model_path": "/data/mingkai/neg/model/Qwen2.5-7B",
+      "adapter_path": "outputs/e4_qwen_r3v5_lp15_rs3_boost_rd30_os3/adapter",
+      "device_map": "auto",
+      "torch_dtype": "float16",
+      "trust_remote_code": false
+    },
+    {
+      "name": "llama_base",
+      "mode": "hf_local",
+      "model_path": "/data/share/neg/model/Meta-Llama-3.1-8B",
+      "device_map": "auto",
+      "torch_dtype": "float16",
+      "trust_remote_code": false
+    },
+    {
+      "name": "llama_dpo",
+      "mode": "hf_local",
+      "model_path": "/data/share/neg/model/Meta-Llama-3.1-8B",
+      "adapter_path": "outputs/llama_dpo_baseline/adapter",
+      "device_map": "auto",
+      "torch_dtype": "float16",
+      "trust_remote_code": false
+    },
+    {
+      "name": "llama_nc_sft",
+      "mode": "hf_local",
+      "model_path": "/data/share/neg/model/Meta-Llama-3.1-8B",
+      "adapter_path": "outputs/llama_nc_sft/adapter",
+      "device_map": "auto",
+      "torch_dtype": "float16",
+      "trust_remote_code": false
+    },
+    {
+      "name": "llama_mgnm",
+      "mode": "hf_local",
+      "model_path": "/data/share/neg/model/Meta-Llama-3.1-8B",
+      "adapter_path": "outputs/llama_rd10_os2/adapter",
+      "device_map": "auto",
+      "torch_dtype": "float16",
+      "trust_remote_code": false
+    }
+  ]
+}

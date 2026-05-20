@@ -1,0 +1,1145 @@
+% AAAI 2026 Submission — Anonymous
+\documentclass[letterpaper]{article}
+\usepackage{aaai26}
+\usepackage{times}
+\usepackage{helvet}
+\usepackage{courier}
+\usepackage[T1]{fontenc}
+\usepackage{url}
+\usepackage{graphicx}
+\usepackage{latexsym}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{makecell}
+\usepackage{xcolor}
+\usepackage{pifont}
+\usepackage{microtype}
+\usepackage{inconsolata}
+
+\pdfinfo{
+  /Title (Negation Blindness in Large Language Models: Diagnosis and Multi-Grained Training Mitigation)
+  /Author (Anonymous)
+}
+
+\setcounter{secnumdepth}{2}
+\setlength\titlebox{2.5in}
+
+\newcommand{\cmark}{\ding{51}}
+\newcommand{\xmark}{\ding{55}}
+\newcommand{\suppress}{[\textsc{Suppress}]}
+\newcommand{\preserve}{[\textsc{Preserve}]}
+\newcommand{\select}{[\textsc{Select}]}
+\newcommand{\mgnm}{\textsc{mgnm}}
+\newcommand{\spos}{s(\cdot)}
+
+\title{Negation Blindness in Large Language Models:\\
+Diagnosis and Multi-Grained Training Mitigation}
+
+\author{Anonymous}
+
+\begin{document}
+\maketitle
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\begin{abstract}
+Large language models (LLMs) exhibit \emph{negation blindness}: when
+a prompt explicitly forbids a concept, models frequently output that
+very concept anyway.
+We make three contributions.
+\textbf{(1)} We release \textbf{E4}, a 937-record benchmark covering three
+negation phenomena---target suppression, scope preservation, and
+negated ranking---with 99.6\% entity holdout.
+\textbf{(2)} We present \textbf{MGNM} (Multi-Grained Negation Modeling), a
+LoRA fine-tuning framework that uses caller-specified behavior tokens with
+five complementary loss terms: suppression, ranking, preservation, positive
+retention, and capability retention.
+\textbf{(3)} On a 397-record label-audited E4 v2 test subset, MGNM achieves
+64.2\% \textsc{NegationFlipAcc} (\textsc{NegFlipAcc}) and 92.9\% \textsc{ScopeCtrl} on Qwen2.5-7B,
+outperforming all baselines on both metrics simultaneously
+(vs.\ NC-SFT: $+13.4$pp NegFlipAcc and $+15.3$pp ScopeCtrl).
+On BoolQ, Qwen MGNM reaches 87.2\% after PMI calibration, while Llama
+exposes a No-prior calibration shift and training tradeoff: its raw score of
+69.0\% recovers to 81.4\% under standard PMI.
+The same trend holds on Llama-3.1-8B, with Mistral-7B providing partial
+cross-architecture validation.
+These peak E4 results are conditional on the correct behavior token;
+structure-assisted behavior routing is evaluated separately as a
+deployment-calibration setting under known task structure, not as a solved
+pure-text automatic routing problem.
+Mechanistic probes on 200 E4 candidate-ranking instances suggest that,
+under this setting, negation failures are not primarily caused by lack
+of attention to negation tokens, but by a failure to translate the
+negation signal into candidate-level ranking preferences.
+MGNM partially repairs this internal signal and provides a discrete interface
+for selecting the intended negation behavior.
+\end{abstract}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Introduction}
+\label{sec:intro}
+
+Consider prompting a generative language model with:
+\begin{quote}
+  \emph{``Name a noun that does \textbf{not} belong to the category of birds.''}
+\end{quote}
+A well-calibrated model should output a non-bird entity.
+In practice, contemporary LLMs frequently output
+\emph{sparrow} or \emph{eagle} --- the very concepts the negation was intended
+to exclude.
+We term this failure mode \emph{negation blindness}.
+
+Negation blindness is not merely a curiosity.
+In retrieval, summarization, and instruction following, negation is a
+primary tool for expressing constraints: ``do not include X,''
+``avoid Y,'' ``explain what is \emph{not} a valid approach.''
+A model that ignores negation produces outputs that violate user intent in
+ways that may be difficult to detect.
+
+Prior work has documented that language models struggle with negation in
+probe studies~\cite{kassner2020negated,ettinger2020bert},
+natural language inference~\cite{hossain2020analysis}, and
+reading comprehension~\cite{ravichander2022condaqa}.
+However, most studies either (a) treat negation handling as a static
+capability measurable via accuracy on a fixed benchmark, without
+distinguishing the \emph{type} of failure, or (b) attempt prompt-level
+interventions that do not target the root cause~\cite{jang2023negation}.
+
+We make the following contributions:
+
+\begin{itemize}
+\item \textbf{E4 Benchmark} (\S\ref{sec:benchmark}): 937 records covering
+  three negation phenomena at entity-level granularity, with
+  strict entity and template holdout to prevent surface-form leakage.
+\item \textbf{MGNM} (\S\ref{sec:method}): a LoRA training framework with
+  caller-specified behavior tokens and five complementary losses that jointly
+  train suppression, scope-sensitivity, and ranking in one pass.
+\item \textbf{Comprehensive evaluation} (\S\ref{sec:experiments}): eight
+  baselines, three architectures, two out-of-domain tasks (WikiFact, BoolQ),
+  McNemar significance tests, and mechanistic probing.
+\item \textbf{Mechanistic diagnosis} (\S\ref{sec:mechanism}): logit-lens,
+  attention, and activation-patching experiments on 200 E4 instances suggest that,
+  under the candidate-ranking setting, negation failure is not primarily an
+  attention deficiency but a failure to translate the negation signal into
+  candidate-level ranking preferences.
+\end{itemize}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Related Work}
+\label{sec:related}
+
+\paragraph{Negation in NLP.}
+Negation has long been a challenge in NLP, with task-specific work on
+negation detection and scope resolution~\cite{hossain2020analysis}.
+In the era of pre-trained models, \citet{kassner2020negated} showed that BERT
+treats negated probes almost identically to their affirmative counterparts.
+\citet{hosseini2021understanding} proposed negative training examples to
+improve negation consistency in masked LMs.
+Recent work~\cite{nos2024negation,truong2023unsee} extends these findings to
+instruction-tuned LLMs, showing that explicit chain-of-thought improves but
+does not solve negation handling.
+
+\paragraph{Fine-tuning for instruction following.}
+Supervised fine-tuning~\cite{ouyang2022training} and DPO~\cite{rafailov2023direct}
+are the dominant paradigms for aligning LLMs.
+Neither is designed for negation-specific constraints.
+Vanilla SFT on negation examples leads to over-suppression
+(our audited evaluation confirms ScopeCtrl drops to 54.1\%), and DPO's
+pairwise objective does not distinguish \emph{suppress} from \emph{preserve} contexts.
+
+\paragraph{Inference-time methods.}
+Contrastive Decoding~\cite{li2023contrastive} amplifies the expert--amateur
+logit gap to improve output quality.
+We show that it exacerbates negation blindness (ScopeCtrl $-16.4$pp)
+because the logit gap reflects semantic plausibility, not negation scope.
+Chain-of-thought~\cite{wang2022self} and persona prompting fail similarly:
+surface-level reasoning does not alter intermediate representations.
+
+\paragraph{Constrained text generation.}
+Lexical constraint methods such as Constrained Beam Search~\cite{anderson2017guided}
+and NeuroLogic Decoding~\cite{lu2021neurologic} allow specifying inclusion or
+exclusion constraints over output tokens.
+Our task shares the spirit of exclusion constraints (``do not output $c^*$''),
+but operates on \emph{semantic} categories rather than surface tokens, and requires
+the model to maintain correct scope discrimination (Preserve behavior) simultaneously.
+
+\paragraph{Instruction-following and constraint satisfaction.}
+Recent benchmarks such as IFEval~\cite{zhou2023ifeval} and
+FollowBench~\cite{jiang2023followbench} evaluate whether instruction-tuned
+LLMs satisfy verifiable or multi-level constraints.
+These works measure broad constraint satisfaction as a behavioral property
+across diverse instruction types.
+E4 is complementary: it isolates negation-specific constraint failures
+and separates suppress, preserve, and select behaviors that broad benchmarks
+conflate, enabling fine-grained diagnosis of \emph{why} models fail under
+negated constraints rather than \emph{whether} they do.
+
+\paragraph{Calibration and prior shift.}
+\citet{zhao2021calibrate} show that few-shot prompts introduce spurious label
+priors in language models, which can be corrected by subtracting null-prompt scores.
+\citet{holtzman2021surface} identify similar prior-shift artifacts as
+\emph{surface form competition} and show PMI scoring mitigates them.
+We observe that MGNM's $\mathcal{L}_\text{sup}$ induces a null-context prior shift
+($\Delta\,{\approx}\,{+1.0}$) that contributes to raw BoolQ degradation; PMI
+calibration recovers much of this loss, while retention checkpoints show a
+remaining training tradeoff with E4 behavior control.
+
+\paragraph{Representation editing and behavioral steering.}
+Li et al.~\cite{li2023inference} show that a small set of attention heads
+can be steered at inference time (\emph{inference-time intervention}) to improve
+truthfulness.  Turner et al.~\cite{turner2023activation} demonstrate that
+adding a fixed steering vector to residual activations consistently shifts model
+behavior.  These methods alter continuous representations and cannot distinguish
+negation behaviors across record types.  Our behavior-condition tokens
+(\textsc{[Suppress]}/\textsc{[Preserve]}) function as a discrete steering
+interface: when the intended behavior is supplied, the same negated prompt can
+be routed to type-appropriate behavior without modifying base representations.
+
+\paragraph{Mechanistic interpretability.}
+Logit-lens probing~\cite{nostalgebraist2020logitlens} and activation
+patching~\cite{wang2022interpretability,meng2022locating} have revealed
+how factual knowledge is stored in transformer layers.
+We apply these methods to diagnose \emph{where} in the processing pipeline
+negation information is lost, finding that the failure is not attentional
+but representational: negation tokens are attended to but their signal is
+not translated into candidate-level ranking preferences.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{The E4 Benchmark}
+\label{sec:benchmark}
+
+\subsection{Task Formulation}
+Given a \emph{negated} prompt $p^-$ and a candidate pool
+$\mathcal{C} = \{c_1, \ldots, c_K\}$, a model must rank candidates by
+assigning log-probabilities $s(p^-, c_i)$.
+Correct behavior depends on the negation \emph{type}:
+
+\begin{description}
+\item[\textbf{Suppress}:] The target $c^* \in \mathcal{C}$ is the affirmative
+  answer and should rank \emph{last} after negation.
+  \emph{``Name a noun that does \textbf{not} belong to birds''} $\to$
+  \emph{sparrow} must be beaten by all non-bird alternatives.
+\item[\textbf{Preserve}:] The affirmative answer remains correct despite
+  surface-level negation in the prompt.
+  \emph{``You must \textbf{not} neglect the workflow rules''} $\to$
+  the correct action (\emph{obtain approval first}) is still best.
+\item[\textbf{Select}:] A negated alternative exists and should rank highest.
+  \emph{``Steps that should \textbf{not} be used''} $\to$
+  an \emph{incorrect} workflow step should outrank the correct one.
+\end{description}
+
+\subsection{Construction and Statistics}
+E4 records are generated from 47 templates spanning 6 domains (natural
+science, office workflow, geography, social norms, cooking, sports).
+Each template instantiates 20 entity families; entities within a family
+share semantic structure but differ in surface form.
+We enforce strict holdout: test entities share no family with training entities
+(holdout rate 99.6\%) and all templates are split at family level.
+
+The full generated dataset contains 937 records (412 train, 525 test v2).
+The canonical training split contains 83 suppress, 123 preserve
+(out-of-scope), 74 preserve (double-negation), and 132 select instances.
+Table~\ref{tab:dataset} summarizes the split statistics.
+After a label audit, we remove direct negated-selection prompts that had been
+assigned to non-select behaviors (e.g., ``Which planet does not have rings?''
+with a ringed-planet positive answer), plus preserve rows whose negated prompt
+directly asks for the non-positive answer. Unless otherwise stated, E4 v2
+candidate-ranking results are reported on this 397-record audited subset
+(97 suppress, 98 preserve, 202 select).
+The strongest Qwen adapter reported below is trained on a 471-record augmented
+input that adds 59 exclusive-choice select records to the canonical training
+split and is evaluated on the audited test subset; the strict audited training
+split contains 357 records and is used for audit/phase-2 diagnostics, not as
+the source of the strongest adapter.
+
+\begin{table}[t]
+\centering
+\small
+\caption{E4 dataset statistics.}
+\label{tab:dataset}
+\begin{tabular}{lrrr}
+\toprule
+Type & Train & Test & Total \\
+\midrule
+Suppress (in-scope) & \phantom{0}83 & 129 & 212 \\
+Preserve (out-of-scope) & 123 & 128 & 251 \\
+Preserve (double-neg.) & \phantom{0}74 & \phantom{0}66 & 140 \\
+Select (gold-neg) & 132 & 202 & 334 \\
+\midrule
+\textbf{Total} & \textbf{412} & \textbf{525} & \textbf{937} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Method: MGNM}
+\label{sec:method}
+
+\subsection{Behavior-Conditioned Prompts}
+
+For each training record with negated prompt $p^-$, we prepend a
+\emph{behavior token} that signals the required response type:
+
+\begin{equation}
+\tilde{p}^- = \begin{cases}
+  \texttt{[SUPPRESS]}\;p^- & \text{if suppress} \\
+  \texttt{[PRESERVE]}\;p^- & \text{if preserve} \\
+  p^- & \text{if select}
+\end{cases}
+\end{equation}
+
+The same token is prepended at evaluation time, allowing the model to
+condition on explicit behavioral intent.
+This is analogous to control codes~\cite{ouyang2022training} but operates
+at the negation-type level rather than the style level.
+
+\subsection{Loss Functions}
+
+Let $s(p, c) = \sum_t \log p_\theta(c_t \mid p, c_{<t})$ be the
+sequence log-probability of completion $c$ given prefix $p$.
+For each record we compute a weighted sum of five losses.
+
+\paragraph{Positive retention ($\mathcal{L}_\text{pos}$).}
+Ensures the model preserves affirmative-condition accuracy on the
+positive prompt $p^+$:
+\begin{equation}
+\mathcal{L}_\text{pos} = \operatorname{ReLU}\!\left(
+  \gamma_\text{pos} - \max_{c \in \mathcal{G}^+} s(p^+, c)
+  + \max_{c \in \mathcal{C}^-} s(p^+, c)
+\right)
+\end{equation}
+where $\mathcal{G}^+$ is the gold affirmative set and
+$\mathcal{C}^-$ the competitor pool.
+
+\paragraph{Suppression ($\mathcal{L}_\text{sup}$).}
+For \textsc{suppress} records, trains the model to rank all pool
+candidates above the forbidden target under the negated prompt:
+\begin{equation}
+\mathcal{L}_\text{sup} = \operatorname{ReLU}\!\left(
+  \gamma_\text{sup} + \max_{c \in \mathcal{G}^+} s(\tilde{p}^-, c)
+  - \operatorname{mean}_{c \in \mathcal{P}} s(\tilde{p}^-, c)
+\right)
+\end{equation}
+where $\mathcal{P}$ is the candidate pool (non-target completions).
+Note that $\mathcal{L}_\text{sup}$ uses a mean-pool margin; NegFlipAcc strictly
+requires \emph{every} pool candidate to beat the target, so a pairwise version
+$\sum_{c \in \mathcal{P}} \operatorname{ReLU}(\gamma + s(\tilde{p}^-, c^*) - s(\tilde{p}^-, c))$
+is theoretically more aligned.
+Preliminary experiments found the mean-pool margin empirically sufficient;
+pairwise and softmin variants yielded no statistically significant gain on
+the E4 dev set.
+
+\paragraph{Ranking ($\mathcal{L}_\text{rank}$, $\mathcal{L}_\text{dist}$).}
+For \textsc{select} records, first trains the negated gold above the
+affirmative gold, then pushes it above all distractors:
+\begin{align}
+\mathcal{L}_\text{rank} &= \operatorname{ReLU}\!\left(
+  \gamma - \max_{c \in \mathcal{G}^-} s(p^-, c)
+  + \max_{c \in \mathcal{G}^+} s(p^-, c)
+\right) \\
+\mathcal{L}_\text{dist} &= \operatorname{ReLU}\!\left(
+  \gamma - \max_{c \in \mathcal{G}^-} s(p^-, c)
+  + \max_{c \in \mathcal{D}} s(p^-, c)
+\right)
+\end{align}
+where $\mathcal{G}^-$ is the gold negated set and $\mathcal{D}$ the distractor pool.
+
+\paragraph{Preservation ($\mathcal{L}_\text{pre}$).}
+For \textsc{preserve} records, the affirmative answer must remain top-ranked
+even under the negated prompt:
+\begin{equation}
+\mathcal{L}_\text{pre} = \operatorname{ReLU}\!\left(
+  \gamma_\text{pre} - \max_{c \in \mathcal{G}^+} s(\tilde{p}^-, c)
+  + \max_{c \in \mathcal{C}^-} s(\tilde{p}^-, c)
+\right)
+\end{equation}
+
+\paragraph{Capability retention ($\mathcal{L}_\text{ret}$).}
+KL divergence between the fine-tuned and base model on a set of
+general-domain retention texts $\mathcal{T}$:
+\begin{equation}
+\mathcal{L}_\text{ret} = \mathbb{E}_{t \in \mathcal{T}}\!\left[
+  \mathrm{KL}\!\left(p_\theta(\cdot \mid t) \;\|\; p_{\theta_0}(\cdot \mid t)\right)
+\right]
+\end{equation}
+
+\paragraph{Total loss.}
+\begin{equation}
+\mathcal{L} = \lambda_\text{pos}\mathcal{L}_\text{pos}
++ \lambda_\text{sup}\mathcal{L}_\text{sup}
++ \lambda_\text{rank}\mathcal{L}_\text{rank}
++ \lambda_\text{dist}\mathcal{L}_\text{dist}
++ \lambda_\text{pre}\mathcal{L}_\text{pre}
++ \lambda_\text{ret}\mathcal{L}_\text{ret}
+\end{equation}
+
+\subsection{Training Setup}
+
+We fine-tune LoRA adapters (rank 16, $\alpha=32$, dropout=0.05,
+applied to all seven projection matrices) for 3 epochs using the Adam
+optimizer ($\mathrm{lr}=2\times10^{-4}$ for Qwen/Llama,
+$5\times10^{-5}$ for Mistral; gradient accumulation $=8$).
+Loss weights: $\lambda_\text{pos}=1.0$, $\lambda_\text{sup}=1.0$,
+$\lambda_\text{rank}=1.5$, $\lambda_\text{dist}=3.0$,
+$\lambda_\text{pre}=1.5$, $\lambda_\text{ret}=0.05$.
+Preserve-type records are oversampled $3\times$ to compensate
+for class imbalance.
+Training requires a single 80GB A100; wall-clock time is 15--40 minutes.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Metrics}
+\label{sec:metrics}
+
+\begin{itemize}
+\item \textbf{NegationFlipAcc (NegFlipAcc)}: fraction of flip-required records
+  (\texttt{suppress\_target} and \texttt{select\_gold\_neg}) where the model is
+  correct on both the positive prompt and the negated prompt. On the audited
+  subset this metric has $n{=}299$ records (97 suppress + 202 select).
+\item \textbf{ScopeCtrl}: fraction of preserve records where the model
+  avoids over-negation (affirmative answer remains top-ranked; $n{=}98$).
+\item \textbf{Hard NegRank}: fraction of \texttt{select\_gold\_neg} records
+  where the original single gold negative answer is top-ranked ($n{=}202$).
+\item \textbf{Multi-answer NegRank}: an audited SELECT metric that also accepts
+  manually verified semantically valid negative alternatives when a prompt
+  admits more than one correct negative answer.
+\item \textbf{OverNeg}: complement of ScopeCtrl (lower is better).
+\item \textbf{MMLU $\Delta$}: accuracy change on a 570-question MMLU 5-shot
+  diagnostic subset relative to the base model, used as a lightweight
+  capability-retention check.
+\end{itemize}
+
+\subsection{Baselines}
+
+\paragraph{Inference-time.}
+\emph{Prompt+Warning}: system message instructing the model to strictly respect negation.
+\emph{Prompt+Persona}: persona prompt framing the model as a negation-aware expert.
+\emph{Prompt+CoT}: five-step chain-of-thought scaffold.
+\emph{Contrastive Decoding} (CD)~\cite{li2023contrastive}: Qwen2.5-7B (expert)
+minus $0.5\times$ Qwen2.5-0.5B (amateur) log-probabilities.
+
+\paragraph{Fine-tuning.}
+\emph{Vanilla SFT}: standard supervised fine-tuning on E4 training records
+with cross-entropy on the gold completion.
+\emph{DPO}~\cite{rafailov2023direct}: direct preference optimization with
+negated completions as rejected and gold completions as chosen.
+\emph{NC-SFT}: negation-conditioned SFT using only cross-entropy on negated
+examples (no behavior tokens, no preservation loss).
+Fine-tuned main-table adapters follow the corresponding training configuration;
+the strongest Qwen MGNM adapter uses the 471-record augmented training input
+described in \S\ref{sec:benchmark}.
+We also audited a 357-record strict training split and ran clean phase-2
+diagnostics; those diagnostics did not improve the main ScopeCtrl/NegRank
+tradeoff, so the main results keep the strongest original adapter evaluated on
+the audited test subset.
+
+\subsection{Main Results}
+
+Table~\ref{tab:main} reports results on the label-audited E4 v2 test subset
+(397 records).
+
+\begin{table*}[t]
+\centering
+\small
+\caption{Main results on label-audited E4 v2 (397 records). NegRank is the
+  single-gold Hard NegRank. BoolQ$^\dagger$: full validation
+  (3,270 records); format \textbf{raw(PMI)} when null-prior No-bias $>0.5$.
+  MMLU $\Delta$: lightweight 570-question diagnostic relative to base model.
+  Best value in each column is \textbf{bold}; $\dagger$see \S\ref{sec:ood}.}
+\label{tab:main}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lrrrrrrr}
+\toprule
+Method & NegRank & NegFlipAcc & ScopeCtrl & OverNeg & WikiFact & MMLU $\Delta$ & BoolQ$^\dagger$ \\
+\midrule
+\multicolumn{8}{l}{\textit{Qwen2.5-7B}} \\
+Base (no fine-tuning) & 39.6 & 17.7 & 87.8 & 12.2 & --- & --- & 83.3 \\
+\quad + Warning & 38.1 & \phantom{0}7.7 & 80.6 & 19.4 & --- & --- & --- \\
+\quad + Persona & 37.6 & 12.0 & 77.6 & 22.4 & --- & --- & --- \\
+\quad + CoT & 37.1 & 11.0 & 83.7 & 16.3 & --- & --- & --- \\
+\quad + Contrastive Dec. & 36.6 & 20.7 & 71.4 & 28.6 & --- & --- & --- \\
+Vanilla SFT & 59.9 & 61.2 & 54.1 & 45.9 & --- & $-0.88$ & --- \\
+DPO & 44.6 & 25.8 & 76.5 & 23.5 & 44.0 & $+0.00$ & 86.8(87.0) \\
+NC-SFT & 53.0 & 50.8 & 77.6 & 22.4 & 63.0 & $+0.18$ & 87.8 \\
+MGNM (ours) & \textbf{63.9} & \textbf{64.2} & \textbf{92.9} & \phantom{0}\textbf{7.1} & \textbf{91.0} & $-1.23$ & \textbf{86.2(87.2)} \\
+\midrule
+\multicolumn{8}{l}{\textit{Llama-3.1-8B}} \\
+Base & 30.7 & 12.0 & 81.6 & 18.4 & --- & --- & 83.2 \\
+Vanilla SFT & 43.6 & 54.5 & 28.6 & 71.4 & --- & $-8.77$ & --- \\
+DPO & 48.5 & 21.4 & 73.5 & 26.5 & 33.0 & $+1.23$ & 57.1(67.7) \\
+NC-SFT & 58.4 & 53.2 & 68.4 & 31.6 & 75.0 & $-3.68$ & 85.5 \\
+MGNM (ours) & \textbf{62.4} & \textbf{60.9} & \textbf{89.8} & \phantom{0}\textbf{10.2} & 79.0 & $-3.51$ & 69.0(81.4) \\
+\midrule
+\multicolumn{8}{l}{\textit{Mistral-7B (partial cross-architecture validation)}} \\
+Base & 33.7 & 14.0 & 82.7 & 17.3 & --- & --- & --- \\
+NC-SFT & 59.9 & 47.2 & 73.5 & 26.5 & 74.0 & $-0.53$ & --- \\
+MGNM (ours) & 53.5 & 57.7 & 91.8 & \phantom{0}8.2 & 86.0 & $+0.70$ & --- \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\paragraph{Inference-time methods.}
+All prompt variants reduce ScopeCtrl below the base model (87.8\%$\to$78--84\%)
+while yielding minimal NegFlipAcc gains (8--12\% vs.\ 17.7\% base).
+CD achieves the highest inference-time NegFlipAcc (20.7\%) but collapses
+ScopeCtrl to 71.4\% ($-16.4$pp), because amplifying the expert--amateur logit
+gap increases differentiation without distinguishing suppress from preserve behavior.
+
+\paragraph{Fine-tuning methods.}
+Vanilla SFT achieves high NegFlipAcc (61.2\%) via wholesale suppression,
+at the cost of severe over-negation (ScopeCtrl 54.1\%).
+DPO and NC-SFT improve over base but reveal a fundamental tension:
+suppression gains come at the cost of specificity.
+
+\paragraph{MGNM.}
+MGNM achieves 64.2\% NegFlipAcc and 92.9\% ScopeCtrl on Qwen2.5-7B,
+with OverNeg at 7.1\%---\emph{lower} than the base model (12.2\%).
+Improvements over DPO and NC-SFT remain statistically significant
+(two-sided McNemar test): $+38.5$pp and $+13.4$pp on NegFlipAcc;
+$+16.3$pp and $+15.3$pp on ScopeCtrl.
+Results are consistent on Llama-3.1-8B, while Mistral-7B provides
+partial cross-architecture validation.
+On Mistral-7B-Instruct-v0.3, MGNM improves over its base model by
+$+43.7$pp NegFlipAcc, $+9.1$pp ScopeCtrl, and $+19.8$pp NegRank,
+while reducing OverNeg by $9.1$pp.
+Compared with Mistral NC-SFT, MGNM is not highest on every single metric:
+NC-SFT has higher hard NegRank (59.9 vs.\ 53.5). However, NC-SFT's ScopeCtrl
+drops sharply to 73.5\% and OverNeg rises to 26.5\%, whereas MGNM preserves a
+balanced behavior profile with stronger NegFlipAcc, ScopeCtrl, OverNeg, and
+WikiFact.
+
+\subsection{Open-Ended Generation Evaluation}
+\label{sec:freegen}
+
+Candidate-ranking evaluation may not fully reflect real-world usage where no
+candidate pool is provided.
+To complement the main results, we evaluate on the 129 \texttt{suppress\_target}
+records using free-form greedy generation (80 tokens), then apply a
+keyword-overlap heuristic ($\geq 60$\% overlap with banned entity keywords) as
+an automatic proxy for whether the model reproduced the forbidden content
+(Table~\ref{tab:freegen}). This result is supplementary and is not treated as
+the primary benchmark.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Supplementary free-generation evaluation on \texttt{suppress\_target} ($n{=}129$) and
+  label-audited \texttt{preserve\_positive} ($n{=}98$) records.
+  Suppress accuracy: keyword overlap with forbidden entity; Preserve accuracy:
+  keyword overlap with gold-positive answer.}
+\label{tab:freegen}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lrrrr}
+\toprule
+Model & \multicolumn{2}{c}{Suppress ($n{=}129$)} & \multicolumn{2}{c}{Preserve ($n{=}98$)} \\
+\cmidrule(lr){2-3}\cmidrule(lr){4-5}
+ & Free-gen & Cand-rank & Free-gen & Cand-rank \\
+\midrule
+Base       & 62.0\% & 17.7\% & 87.8\% & --- \\
+DPO        & 62.8\% & 26.0\% & ---    & --- \\
+NC-SFT     & 63.6\% & 52.0\% & ---    & --- \\
+MGNM (oracle token)  & \textbf{96.1\%} & \textbf{64.2\%} & 85.7\% & \textbf{92.9\%} \\
+MGNM (hidden ctrl.) & --- & --- & 85.7\% & --- \\
+MGNM (no token)      & 69.0\% & --- & \textbf{92.9\%} & --- \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+MGNM with oracle behavior token reaches 96.1\% free-gen NegFlipAcc on suppress
+records under the keyword proxy, $+33$pp above the baselines (62--64\%).
+This suggests that multi-grained training also improves open-ended generation,
+but only as supplementary evidence; candidate ranking remains the main
+benchmark.
+Even without a behavior token at inference, MGNM retains a $+7$pp lift
+(69.0\% vs.\ 62.0\% base), showing that training itself contributes limited
+transfer beyond token-conditioned routing.
+For audited preserve records, the base model achieves 87.8\% keyword overlap in free
+generation---it often ignores the negating modifier and answers naturally---while
+MGNM oracle reaches 85.7\%.
+We further tested hidden-control variants that move the preserve instruction into
+a system message, XML-style control tag, or natural-language instruction; the
+best hidden-control setting remains 85.7\%, and plain-text rendering does not
+improve this result.
+Removing the \textsc{[Preserve]} prefix at inference raises preserve free-generation
+to 92.9\%, indicating that the token is useful for candidate ranking but changes
+the continuation distribution in open-ended generation in a way prompt-only
+hidden control does not reliably repair.
+Thus preserve free-generation is better decoded without a behavior prefix,
+while the underlying candidate-ranking ScopeCtrl (92.9\%) remains strong.
+The keyword-overlap detector is conservative for suppress; several of the failures
+were cases where the model paraphrased the banned entity, so actual avoidance
+rates may be higher.
+
+\subsection{Out-of-Domain Generalization}
+\label{sec:ood}
+
+\paragraph{WikiFact.}
+We evaluate on 200 negated factual assertions about Wikipedia entities
+unseen during training.
+MGNM achieves 91.0\% NegFlipAcc on Qwen (DPO: 44.0\%, NC-SFT: 63.0\%)
+and 79.0\% on Llama (DPO: 33.0\%, NC-SFT: 75.0\%),
+confirming that multi-grained training generalizes beyond template-based probes.
+
+\paragraph{BoolQ.}
+We evaluate on the BoolQ full validation set (3,270 yes/no questions~\cite{clark2019boolq}).
+Qwen MGNM raw accuracy (86.2\%) is marginally \emph{higher} than base (83.3\%);
+however, Llama MGNM (69.0\%) regresses substantially versus Llama base (83.2\%).
+We investigate this Llama regression.
+
+\emph{Prior-shift diagnosis.}
+MGNM training shifts the model's null-context prior toward ``No.''
+Formally, we measure $\Delta = \log P(\text{No}|\text{null}) - \log P(\text{Yes}|\text{null})$,
+where the null prompt contains no passage.
+Table~\ref{tab:prior} shows that MGNM and DPO induce
+$\Delta \approx +1.0$ on both models, while NC-SFT and base show $|\Delta| < 0.15$.
+This is a direct side-effect of $\mathcal{L}_\text{sup}$: reducing the log-probability
+of affirmative completions globally shifts the null prior.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Null-context prior shift $\Delta = \log P(\text{No}|\text{null}) - \log P(\text{Yes}|\text{null})$.
+  Values $>0.5$ trigger PMI calibration.}
+\label{tab:prior}
+\begin{tabular}{lrr}
+\toprule
+Method & Qwen $\Delta$ & Llama $\Delta$ \\
+\midrule
+Base & $+0.09$ & $-0.68$ \\
+DPO & $+1.09$ & $+1.09$ \\
+NC-SFT & $+0.13$ & $-0.06$ \\
+MGNM & $+1.06$ & $+0.80$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\emph{PMI calibration.}
+We apply PMI~\cite{holtzman2021surface}:
+$\hat{s}(p, c) = s(p, c) - \log P(c \mid \text{null})$.
+After calibration, Qwen MGNM achieves \textbf{87.2\%}, the highest PMI-calibrated
+accuracy across all evaluated methods.
+Llama MGNM reaches 81.4\%, a residual 1.8pp gap versus Llama base (83.2\% raw).
+The large Llama raw regression is therefore best interpreted as a combination
+of calibration shift and training tradeoff, rather than as a broad capability
+collapse. A stricter held-out calibration diagnostic supports the calibration
+component: using a 20\% calibration split
+and 80\% held-out test split over five random seeds, the best scalar PMI
+coefficient is stable at $\alpha = 1.65 \pm 0.12$, raising held-out Llama MGNM
+accuracy from 81.4\% under standard PMI to 84.6\% on average. At the same time,
+retention-oriented checkpoints can recover raw BoolQ only by weakening E4
+ranking, ScopeCtrl, or WikiFact, so we report BoolQ as a calibration-plus-training
+tradeoff rather than calibration alone. Qwen shows no regression
+even in raw accuracy.
+
+\subsection{Ablation Study}
+
+Table~\ref{tab:ablation} isolates each loss component.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Ablation study (E4 v2). $\Delta$ relative to MGNM full.}
+\label{tab:ablation}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lrrrr}
+\toprule
+Variant & NegFlipAcc & ScopeCtrl & OverNeg & NegRank \\
+\midrule
+\multicolumn{5}{l}{\textit{Qwen2.5-7B}} \\
+MGNM (full) & \textbf{64.2} & \textbf{92.9} & \phantom{0}\textbf{7.1} & \textbf{63.9} \\
+w/o $\mathcal{L}_\text{sup}$ & 31.8 & 86.7 & 13.3 & 48.5 \\
+w/o $\mathcal{L}_\text{pre}$ & 49.2 & 13.3 & 86.7 & 36.1 \\
+\midrule
+\multicolumn{5}{l}{\textit{Llama-3.1-8B}} \\
+MGNM (full) & \textbf{60.9} & \textbf{89.8} & \phantom{0}\textbf{10.2} & \textbf{62.4} \\
+w/o $\mathcal{L}_\text{sup}$ & 44.8 & 81.6 & 18.4 & 48.5 \\
+w/o $\mathcal{L}_\text{pre}$ & 55.2 & 22.4 & 77.6 & 44.1 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Removing $\mathcal{L}_\text{sup}$ drops NegFlipAcc by $-32.4$pp (Qwen)
+and $-16.1$pp (Llama), confirming it is the primary driver of
+suppression accuracy.
+Removing $\mathcal{L}_\text{pre}$ is catastrophic for ScopeCtrl:
+$-79.6$pp (Qwen) and $-67.3$pp (Llama), with OverNeg rising sharply---
+mirroring Vanilla SFT.
+Both components are individually necessary: $\mathcal{L}_\text{sup}$ trains
+\emph{what} to suppress; $\mathcal{L}_\text{pre}$ trains \emph{when not to}.
+
+\paragraph{Behavior token ablation.}
+To quantify oracle-token dependence, we evaluate the same MGNM model under
+multiple token conditions, including structure-assisted routing strategies, and
+additionally train a no-token variant (Table~\ref{tab:token_ablation}).
+
+\begin{table}[t]
+\centering
+\small
+\caption{Behavior token ablation (Qwen2.5-7B, candidate ranking, $n{=}397$).
+  Router accuracy denotes the fraction of records assigned the correct token.}
+\label{tab:token_ablation}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{lrrrl}
+\toprule
+Setting & NegFlipAcc & ScopeCtrl & NegRank & Note \\
+\midrule
+Oracle token (current)         & \textbf{64.2} & \textbf{92.9} & \textbf{63.9} & correct token at inference \\
+\midrule
+Two-stage + suppression-only guard & 62.9 & 88.8 & 61.4 & force \texttt{suppression\_only} to suppress \\
+Two-stage supervised router (92.9\% acc) & 61.9 & 87.8 & 60.4 & preserve-first classifier \\
+Two-stage supervised, empty SELECT & 61.9 & 88.8 & 61.4 & no prefix when classifier predicts select \\
+Candidate-aware LLM router (69.5\% acc) & 60.5 & 66.3 & 59.9 & prompt plus candidate pool \\
+Candidate LLM, empty SELECT    & 59.5 & 69.4 & 61.4 & no prefix when router predicts select \\
+Supervised TF-IDF router (70.0\% acc) & 56.9 & 53.1 & 57.4 & trained on strict-train labels \\
+Supervised TF-IDF, empty SELECT & 57.2 & 59.2 & 59.4 & no prefix when classifier predicts select \\
+Prompt-only LLM router         & 42.1 & 73.5 & 40.6 & GPT-4.1-mini zero-shot routing \\
+Rule router (67.3\% acc)       & 53.5 & 44.9 & 45.5 & keyword/regex heuristics \\
+\midrule
+No token (oracle model)        & 59.5 & 56.1 & \textbf{64.9} & no prefix at inference \\
+Wrong token (all \textsc{[Suppress]}) & 42.8 & \phantom{0}0.0 & 24.8 & adversarial mismatch \\
+No-token trained model         & 57.2 & 67.3 & 62.4 & trained without prefixes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Without any token at inference, NegFlipAcc drops $-4.7$pp while ScopeCtrl falls $-36.7$pp;
+NegRank is slightly higher ($+1.0$pp) because \texttt{select\_gold\_neg}
+records already have no token in training.
+Under the adversarial wrong-token condition (forcing \textsc{[Suppress]} on all
+records), ScopeCtrl collapses to $0.0\%$, confirming tokens carry genuine
+behavioral semantics rather than serving as inert prefixes.
+Training without any behavior prefix yields NegFlipAcc $57.2\%$ ($-7.0$pp) and
+ScopeCtrl $67.3\%$ ($-25.6$pp), showing that behavior tokens contribute at
+\emph{both} training and inference: without them at training time, the model
+cannot fully learn scope-conditional behavior, raising over-negation to $32.7\%$
+on preserve records despite retaining partial suppression capability.
+
+\paragraph{Structure-assisted routing.}
+We explore structure-assisted token-assignment strategies ranging from keyword/regex
+rules to a candidate-aware LLM router (GPT-4.1-mini).
+Adding the unlabeled candidate pool raises router accuracy to 69.5\% and
+improves downstream performance to 60.5\% NegFlipAcc, 66.3\% ScopeCtrl, and
+59.9\% NegRank.
+Because \texttt{select\_gold\_neg} rows are relatively robust without a prefix,
+using an empty prefix when the router predicts SELECT further improves the
+Scope/Rank tradeoff (59.5/69.4/61.4).
+Error analysis shows that the main failure mode is preserve cases being
+over-routed to SELECT. We therefore train a two-stage supervised router:
+stage 1 detects \texttt{preserve\_positive} versus non-preserve, and stage 2
+separates \texttt{suppress\_target} from \texttt{select\_gold\_neg}. With a
+threshold selected on a held-out calibration split, this router reaches 92.9\%
+behavior accuracy on the strict test subset (suppress 94.8\%, preserve 93.9\%,
+select 91.6\%). Downstream, it achieves 61.9\% NegFlipAcc, 87.8\% ScopeCtrl,
+and 60.4\% NegRank; using an empty prefix when the router predicts SELECT
+further improves the automatic setting to 61.9/88.8/61.4. Adding a
+\texttt{suppression\_only} guard and keeping the calibrated threshold at 0.35
+raises behavior accuracy to 94.2\% and downstream performance to
+62.9/88.8/61.4. We also test a text-derived suppression guard: a small set of
+surface-pattern detectors routes explicit exclusion questions to \suppress{}
+without reading dataset-internal \texttt{semantic\_mode} labels. Table~\ref{tab:router_guard}
+shows that this text-derived guard recovers the WikiFact suppress-only failure
+to the oracle-token level.
+These results define the scope of our claim: MGNM is a token-conditioned
+controller whose peak performance assumes correct behavior selection, while
+automatic routing remains a deployment bottleneck.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Suppression guard variants for automatic routing. E4 scores are
+  NegFlipAcc / ScopeCtrl / NegRank on the 397-record strict test subset.
+  WikiFact is a 100-record suppress-only out-of-domain probe.}
+\label{tab:router_guard}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lrr}
+\toprule
+Router & E4 & WikiFact recall / NegFlipAcc \\
+\midrule
+Two-stage router & 61.9 / 87.8 / 60.4 & 29.0 / 78.0 \\
++ metadata guard & 62.9 / 88.8 / 61.4 & 100.0 / 91.0 \\
++ text-derived guard & 61.9 / 88.8 / 61.4 & 100.0 / 91.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\paragraph{SELECT multi-answer audit.}
+Since some SELECT prompts admit multiple semantically valid negative answers,
+we report both single-gold Hard NegRank and audited Multi-answer NegRank.
+Hard NegRank is intentionally strict and accepts only the original gold
+negative answer. Multi-answer NegRank additionally accepts manually verified
+valid negative alternatives. For example,
+when a question asks which country does not primarily speak Spanish, both
+``Germany'' and ``Japan'' may be valid negative candidates depending on the
+candidate pool. We therefore run a conservative manual audit over candidate-pool
+misses and report Multi-answer NegRank in Table~\ref{tab:select_audit}.
+
+\begin{table}[t]
+\centering
+\small
+\caption{SELECT single-gold ambiguity audit on \texttt{select\_gold\_neg}
+records ($n{=}202$). Multi-answer NegRank counts manually verified valid
+alternatives from \texttt{candidate\_pool\_neg}.}
+\label{tab:select_audit}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lrrr}
+\toprule
+Model & Hard NegRank & Multi-answer NegRank & Rescued \\
+\midrule
+Qwen Base & 36.6 & 45.0 & 17 \\
+Qwen DPO & 44.6 & 55.9 & 23 \\
+Qwen NC-SFT & 53.0 & 64.4 & 23 \\
+Qwen MGNM & \textbf{63.9} & \textbf{85.6} & 44 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+For Qwen MGNM, 44 of 50 candidate-pool misses are judged valid under this
+conservative audit, raising SELECT NegRank from 63.9\% to 85.6\%. This means
+many hard misses are annotation-boundary cases rather than invalid model
+choices. Applying the same audit protocol to all Qwen models preserves MGNM's
+advantage and indicates that the main remaining SELECT bottleneck is partly a
+label-boundary issue, not simply insufficient rank-loss strength. As a check, a stronger rank-dist
+variant (RD30) does not improve full-test NegRank and worsens ScopeCtrl, so we
+keep the current MGNM model as the main result.
+
+\subsection{Data Scale Analysis}
+
+Figure~\ref{fig:scale} shows NegFlipAcc, ScopeCtrl, and Hard NegRank as a function
+of training set fraction, with random 25\%/50\%/75\%/100\% samples from
+the 471-record augmented training input (same seed for all, oversampling preserved).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\columnwidth]{../outputs/data_scale_curve.pdf}
+\caption{Performance vs.\ training data scale (Qwen2.5-7B).
+  Marginal gains decrease after 50\%; 25\% of training data already outperforms
+  all inference-time methods, showing high sample efficiency.}
+\label{fig:scale}
+\end{figure}
+
+The learning curve is notably steep at low data: after reaggregation on the
+audited test subset, 50\% of training data (236 records) yields 53.8\% NegFlipAcc
+and 85.7\% ScopeCtrl.
+Gains from 50\%$\to$100\% are smaller than the early-data gains
+($+10.4$pp NegFlipAcc, $+7.1$pp ScopeCtrl),
+and 25\% of training data already exceeds all inference-time methods on NegFlipAcc,
+indicating high sample efficiency.
+Whether scaling the dataset further continues to improve performance on more
+diverse distributions remains an open question.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Mechanistic Analysis}
+\label{sec:mechanism}
+
+To understand \emph{where} negation blindness originates, we apply three
+mechanistic probes to 200 E4 probes: logit-lens (E1),
+attention attribution (E2), and activation patching (E3).
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=0.95\columnwidth]{../outputs/mechanism_cross_model_final.pdf}
+\caption{Mechanistic comparison: Qwen2.5-7B Base, Qwen MGNM, and Llama MGNM.
+  \textbf{Top}: neg\_margin = allowed $-$ forbidden score (logit lens).
+  \textbf{Middle left}: best-allowed rate; \textbf{Middle right}: attention to negation token.
+  \textbf{Bottom}: activation patching recovery rate.}
+\label{fig:mechanism}
+\end{figure}
+
+\paragraph{E1: Layer-wise negation signal.}
+We compute the \emph{neg\_margin} = $\max_{c^+ \in \mathcal{G}^+}
+\hat{s}_\ell(p^-, c^+) - s_\ell(p^-, c^*)$ at each layer $\ell$
+via the logit lens~\cite{nostalgebraist2020logitlens},
+where $c^*$ is the forbidden target.
+A negative margin indicates the forbidden target outranks allowed alternatives.
+As shown in Figure~\ref{fig:mechanism} (top), the \emph{mean} margin (across 200 probes)
+is negative throughout all 28 layers in the Qwen base model (last-layer mean: $-2.52$).
+MGNM modestly improves the final-layer best-allowed rate from 0.535 to 0.595.
+Note: E1 reports layer-wise means, while NegFlipAcc is a sample-level strict-ranking metric;
+the base model's 17.7\% NegFlipAcc indicates that $\sim$18\% of audited examples individually show
+allowed candidates outranking the forbidden target, consistent with a negative mean margin.
+
+\paragraph{E2: Attention to negation tokens.}
+The final-position token allocates substantial attention to negation tokens
+(max-head weight $\approx0.80$ at last layer), consistent across base and MGNM.
+This rules out \emph{attention blindness} as the cause: the model attends to
+negation tokens but does not propagate the negation signal.
+
+\paragraph{E3: Activation patching.}
+We causally patch activations from an unnegated (positive) counterpart prompt
+(\emph{clean}) into the negated prompt's processing (\emph{corrupt}), replacing
+layer-$\ell$ activations and measuring how much correct-ranking recovery results.
+Peak positive-recovery rate is 55\% (base) and 60\% (MGNM) when patching
+from \emph{layer 0}, declining monotonically with patch layer.
+This suggests the clean representation is most informative at layer 0 and is
+progressively overwritten by later context; however, this interpretation
+depends on the patching design and should be treated as suggestive rather than
+conclusive evidence of early-layer overwriting.
+
+\paragraph{Interpretation.}
+The large NegFlipAcc gain on the audited subset ($+46.5$pp) is disproportionate to the small
+representational shift ($+6$pp best-allowed rate at last layer).
+This suggests MGNM operates through two complementary mechanisms:
+(1) partial repair of internal negation representations, and
+(2) behavior-token conditioning that re-routes output decisions at
+the final layer, independent of intermediate representations.
+This interpretation explains why inference-time interventions fail:
+they can only modify (2), but not (1).
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Analysis}
+\label{sec:analysis}
+
+\subsection{Why Inference-Time Methods Fail}
+
+Our mechanistic results explain the failure pattern:
+because the negation signal often fails to become a candidate-level ranking
+preference (with E3's largest recovery at layer 0), downstream logit
+manipulation is poorly positioned to recover it.
+CD amplifies the expert--amateur logit difference, which reflects semantic
+plausibility rankings, not negation scope, causing suppress and preserve decisions
+to be handled identically.
+CoT reasoning ($-7.2$pp NegFlipAcc vs.\ base) and persona prompting ($-5.7$pp ScopeCtrl)
+introduce surface-level behavior that does not alter the probability assignments
+governing final token selection.
+MGNM vs.\ CD on the audited subset: NegFlipAcc $+43.5$pp and ScopeCtrl $+21.5$pp.
+
+\subsection{Prior Shift as a Diagnostic}
+
+The null-context prior shift $\Delta$ is a strong predictor of BoolQ raw degradation
+\emph{when the base model has a large natural bias}.
+For Llama (base $\Delta = -0.68$, Yes-biased), methods with $\Delta > 0.5$ (MGNM: $+0.80$,
+DPO: $+1.09$) flip the prior to No-biased, causing a large raw accuracy drop.
+For Qwen (base $\Delta = +0.09$, near-neutral), the same $\Delta > 0.5$ shift
+produces mild raw \emph{improvements} (86.2\% and 86.8\% vs.\ 83.3\% base)
+because the prior shift corrects a pre-existing slight Yes-bias.
+$\Delta$ thus identifies models at risk of BoolQ degradation: a pre-training
+Yes-bias ($\Delta_\text{base} < 0$) combined with a post-training $\Delta > 0.5$
+warrants PMI calibration.
+Models without PMI calibration applied are expected to degrade.
+
+\subsection{Qualitative Case Study}
+
+Table~\ref{tab:cases} shows which candidate each model ranks first for two
+prompts, illustrating the suppress--preserve asymmetry that prior methods collapse.
+
+\begin{table}[t]
+\centering
+\small
+\caption{Top-ranked candidate per model for two E4 records.
+  (\textbf{bold} = correct; \textit{italic} = failure; \checkmark/\texttimes{} = pass/fail).}
+\label{tab:cases}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{lll}
+\toprule
+Model & Top candidate & Pass? \\
+\midrule
+\multicolumn{3}{l}{\textit{Case A (suppress): ``Is metal NOT known for high conductivity?''}} \\
+\multicolumn{3}{l}{\quad Banned: \textit{``Metal is known for its high conductivity.''}} \\
+Base   & \textit{Metal is known for its high conductivity.} & \texttimes \\
+DPO    & \textit{Metal is known for its high conductivity.} & \texttimes \\
+NC-SFT & \textit{Metal is known for its high conductivity.} & \texttimes \\
+MGNM   & \textbf{Metal is known for its high strength.}     & \checkmark \\
+\midrule
+\multicolumn{3}{l}{\textit{Case B (preserve): ``Do not skip preheating the oven before baking the cake. Why is this important?''}} \\
+\multicolumn{3}{l}{\quad Preserved answer: ``Preheating ensures the cake bakes evenly and rises properly.''} \\
+Base   & \textit{Use a toothpick to test if the cake is done.} & \texttimes \\
+DPO    & \textit{Use a toothpick to test if the cake is done.} & \texttimes \\
+NC-SFT & \textit{Use a toothpick to test if the cake is done.} & \texttimes \\
+MGNM   & \textbf{Preheating ensures the cake bakes evenly and rises properly.} & \checkmark \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+In Case A, all baselines output the forbidden answer despite the explicit
+\emph{NOT} constraint; MGNM with \suppress{} token correctly suppresses it.
+In Case B, the negation scopes over \emph{skipping} preheating, so the factual
+answer about why preheating matters is still entailed and should be
+preserved; all baselines are misled by the negated surface form and rank an
+irrelevant candidate first, while MGNM with \preserve{} token retains the
+correct affirmative answer.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Limitations}
+\label{sec:limitations}
+
+\paragraph{Inference-time behavior selection.}
+MGNM's strongest E4 results assume that the caller supplies the correct
+behavior token. Removing the token preserves some suppression ability
+(59.5\% NegFlipAcc) but reduces ScopeCtrl from 92.9\% to 56.1\%.
+A candidate-aware LLM router improves the routed setting to 60.5\% NegFlipAcc,
+66.3\% ScopeCtrl, and 59.9\% NegRank, and an empty-prefix SELECT variant
+improves the Scope/Rank tradeoff to 59.5/69.4/61.4.
+A two-stage supervised router that first detects preserve records reaches
+92.9\% behavior classification accuracy and improves the automatic setting to
+61.9\% NegFlipAcc, 88.8\% ScopeCtrl, and 61.4\% NegRank when SELECT predictions
+use an empty prefix. Adding a \texttt{suppression\_only} guard raises strict-test
+behavior accuracy to 94.2\% and downstream performance to 62.9/88.8/61.4.
+On WikiFact, a suppress-only out-of-domain probe, the unguarded router recovers
+only 29.0\% suppress recall and reduces Qwen MGNM from 91.0\% oracle-token
+NegFlipAcc to 78.0\%. Both the metadata guard and a text-derived suppression
+detector restore 100.0\% suppress recall and 91.0\% downstream NegFlipAcc.
+This shows that explicit exclusion prompts can be handled without relying on
+dataset-internal \texttt{semantic\_mode} labels. However, arbitrary pure-text
+behavior inference remains open. MGNM should therefore be interpreted as a
+conditional negation behavior controller, not as a complete domain-general
+automatic router.
+
+\paragraph{Behavior token task specificity.}
+The \preserve{} token is effective within the E4 task format but does not
+transfer to other tasks.
+Adding \preserve{} to BoolQ prompts causes Qwen MGNM accuracy to drop to 47\%
+(near-random), showing that behavior tokens are coupled to the training input
+distribution.
+Extending behavior token conditioning to arbitrary tasks would require
+multi-task training or a prompt-adaptation step.
+
+\paragraph{Residual Llama BoolQ gap.}
+After PMI calibration, Llama MGNM (81.4\%) trails Llama base raw (83.2\%)
+by 1.8pp under the default $\alpha=1$ protocol. However, a held-out calibration
+diagnostic shows that the calibration component is recoverable: selecting a scalar PMI
+coefficient on a separate 20\% calibration split yields a stable optimum around
+$\alpha=1.65$ and 84.6\% average held-out accuracy across five seeds. We
+therefore treat calibration shift as one important factor. The retention
+diagnostics show the other factor: checkpoints that recover raw BoolQ do so by
+weakening E4 ranking, ScopeCtrl, or WikiFact. We therefore interpret Llama as
+revealing a real training tradeoff between yes/no retention and specialized
+negation-control behavior, not as a simple model failure. For a formal
+paper-facing result, any scalar calibration still requires a single pre-declared
+calibration split rather than repeated split selection.
+
+\paragraph{Scope of negation phenomena.}
+E4 is designed as a controlled diagnostic benchmark rather than a large-scale
+coverage benchmark: its value is isolating behavior types and enabling causal
+comparison under strict holdout. It covers lexical and morphological negation
+in entity-selection contexts.
+Compositional negation, presupposition cancellation, and multi-hop negation
+are outside the current benchmark scope. The audited strict training split has
+only 357 records, while the strongest Qwen adapter uses the 471-record augmented
+training input; larger audited training sets are needed to test whether clean-from-scratch
+training can match or exceed the current strongest adapter.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\section{Conclusion}
+\label{sec:conclusion}
+
+We have presented MGNM, a LoRA fine-tuning approach that addresses negation
+blindness in LLMs through caller-specified behavior tokens and five
+complementary training objectives.
+On the label-audited E4 benchmark, MGNM simultaneously achieves high suppression
+accuracy (NegFlipAcc 64.2\%), high specificity (ScopeCtrl 92.9\%), and
+over-negation suppression (OverNeg 7.1\%)---objectives that previous methods trade off
+against each other.
+Mechanistic probes (200 E4 candidate-ranking instances) suggest that negation
+failure under this setting is not primarily an attention deficiency, but a failure
+to translate the negation signal into candidate-level ranking preferences.
+MGNM partially repairs this internal signal while additionally exposing
+a conditional interface for output behavior, explaining its disproportionate
+behavioral improvement relative to the representational shift.
+The remaining deployment question is automatic behavior selection under known
+task structure, which our router experiments show is substantially harder than
+the conditional control problem solved here.
+We will release E4, all training scripts, and model adapters upon publication.
+For anonymous review, we provide anonymized data samples, evaluation scripts,
+and metric-computation code.
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\bibliography{references}
+
+%% ─────────────────────────────────────────────────────────────────────────────
+\appendix
+
+\section{Reproducibility Statement}
+
+All experiments load locally prepared copies of publicly available base models:
+Qwen2.5-7B~\cite{qwen2025qwen25},
+Llama-3.1-8B~\cite{dubey2024llama},
+and Mistral-7B-Instruct-v0.3~\cite{jiang2023mistral}.
+LoRA fine-tuning requires a single 80GB A100 GPU; training time is 15--40 minutes
+(3 epochs on the 471-record augmented training input).
+E4 evaluation on 397 audited records requires $<5$ minutes per model.
+All code, data, and trained adapters will be released upon publication under
+CC-BY-4.0 (dataset) and Apache-2.0 (code/adapters); anonymized data samples,
+evaluation scripts, and metric computation code are provided for review.
+
+Hyperparameter details are provided in \S\ref{sec:method}.
+The complete training script exposes all hyperparameters as CLI arguments;
+the exact invocation for each reported model is included in the supplementary
+material's \texttt{run\_*.sh} scripts.
+
+\paragraph{MMLU evaluation protocol.}
+We use the standard Hendrycks et al.~\cite{hendrycks2020measuring} MMLU benchmark
+(57 subjects). We sample 10 questions per subject from the validation split
+(570 questions total, seed~42) and score each option via 5-shot log-probability
+of the single-token continuation (A/B/C/D) following \texttt{Answer:}.
+We use a custom scorer (\texttt{scripts/evaluate\_mmlu.py}), not lm-eval-harness.
+The Llama MGNM $-3.51$pp drop corresponds to $\approx$20 questions out of 570
+and reflects Llama-specific sensitivity to LoRA fine-tuning.
+Because we evaluate a 570-question stratified subset rather than the full
+MMLU test set, MMLU $\Delta$ should be interpreted as a lightweight
+capability-retention diagnostic rather than a definitive estimate of
+general knowledge degradation.
+
+\section{Ethics Statement}
+
+The E4 dataset is synthetically generated from Wikipedia entity facts and
+procedural templates; no private data or crowdsourced human annotations are used.
+Negation blindness mitigation is a safety-relevant capability: models that
+ignore negation may produce outputs that violate user constraints in
+high-stakes applications.
+We identify no dual-use risks specific to negation handling.
+Total compute for all reported experiments is approximately 4 GPU-hours on
+an A100-80GB, excluding baseline model downloads.
+
+\section{Full Significance Test Results}
+
+\begin{table}[h]
+\centering
+\small
+\caption{McNemar two-sided exact test, label-audited E4 v2.
+  $b$~=~baseline-only-correct; $c$~=~MGNM-only-correct.
+  Metric subsets: NegFlipAcc ($n{=}299$, \texttt{flip\_required}), ScopeCtrl ($n{=}98$, preserve), NegRank ($n{=}202$, select).}
+\label{tab:sig}
+\begin{tabular}{llrrrrrl}
+\toprule
+Comparison & Metric & MGNM & Base & $\Delta$ & $b$ & $c$ & Sig. \\
+\midrule
+Qwen vs.\ DPO & NegFlipAcc & 64.2 & 25.8 & $+38.5$ & 6 & 121 & *** \\
+ & ScopeCtrl & 92.9 & 76.5 & $+16.3$ & 2 & 18 & *** \\
+ & NegRank & 63.9 & 44.6 & $+19.3$ & 8 & 47 & *** \\
+\midrule
+Qwen vs.\ NC-SFT & NegFlipAcc & 64.2 & 50.8 & $+13.4$ & 16 & 56 & *** \\
+ & ScopeCtrl & 92.9 & 77.6 & $+15.3$ & 3 & 18 & ** \\
+ & NegRank & 63.9 & 53.0 & $+10.9$ & 12 & 34 & *** \\
+\midrule
+Llama vs.\ DPO & NegFlipAcc & 60.9 & 21.4 & $+39.5$ & 9 & 127 & *** \\
+ & ScopeCtrl & 89.8 & 73.5 & $+16.3$ & 3 & 19 & *** \\
+ & NegRank & 62.4 & 48.5 & $+13.9$ & 11 & 39 & *** \\
+\midrule
+Llama vs.\ NC-SFT & NegFlipAcc & 60.9 & 53.2 & $+7.7$ & 33 & 56 & * \\
+ & ScopeCtrl & 89.8 & 68.4 & $+21.4$ & 6 & 27 & *** \\
+ & NegRank & 62.4 & 58.4 & $+4.0$ & 21 & 29 & ns \\
+\bottomrule
+\multicolumn{8}{l}{*$p{<}0.05$, **$p{<}0.01$, ***$p{<}0.001$; ns~$=$~not significant ($p{=}0.16$, two-sided).} \\
+\end{tabular}
+\end{table}
+
+\section{Prompt Templates}
+
+The four prompt-based baselines use the following system messages
+(truncated for space; full templates in supplementary):
+
+\begin{description}
+\item[Warning:] \emph{``Important: Strictly respect all negations and
+  exclusions in the user's request. If the user says `not X', never output X.''}
+\item[Persona:] \emph{``You are a precise language model with perfect negation
+  comprehension. You always interpret `not', `never', `without' as strict
+  exclusions.''}
+\item[CoT:] \emph{``Step 1: Identify negation words. Step 2: List excluded concepts.
+  Step 3: Generate candidates. Step 4: Remove any excluded concepts.
+  Step 5: Output the final answer.''}
+\end{description}
+
+\end{document}

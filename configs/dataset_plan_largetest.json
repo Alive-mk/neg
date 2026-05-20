@@ -1,0 +1,37 @@
+{
+  "target_examples": 1500,
+  "batch_size": 6,
+  "max_retries_per_batch": 4,
+  "generation_model": "generator",
+  "verifier_model": "verifier",
+  "semantic_mode_mix": {
+    "suppression_only": 0.40,
+    "contrastive_resolution": 0.35,
+    "exclusive_choice": 0.25
+  },
+  "scope_weights": {
+    "in_scope": 2.0,
+    "out_of_scope": 1.0,
+    "double_negation": 1.0
+  },
+  "neg_types": [
+    "verb",
+    "noun",
+    "adverb",
+    "sentential"
+  ],
+  "scope_types": [
+    "in_scope",
+    "out_of_scope",
+    "double_negation"
+  ],
+  "domains": [
+    "factual",
+    "commonsense",
+    "lexical",
+    "instructional"
+  ],
+  "seed_topics_path": "resources/seed_topics_largetest.json",
+  "verifier_threshold": 0.7,
+  "random_seed": 456
+}

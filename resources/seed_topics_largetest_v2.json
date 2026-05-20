@@ -1,0 +1,50 @@
+{
+  "factual": [
+    "historical event and date",
+    "animal taxonomy and habitat",
+    "chemical element and property",
+    "geographic feature and location",
+    "scientific discovery and inventor",
+    "architectural landmark and country",
+    "musical instrument and family",
+    "literary work and author",
+    "astronomical body and characteristic",
+    "biological organ and function"
+  ],
+  "commonsense": [
+    "weather pattern and season",
+    "traffic rule and situation",
+    "shopping habit and preference",
+    "home maintenance and tool",
+    "personal finance and decision",
+    "social etiquette and context",
+    "dietary restriction and food",
+    "environmental behavior and impact",
+    "time management and priority",
+    "interpersonal communication and style"
+  ],
+  "lexical": [
+    "color and visual property",
+    "sound and auditory characteristic",
+    "texture and tactile sensation",
+    "size comparison and measurement",
+    "direction and spatial relationship",
+    "temperature and thermal property",
+    "weight and physical property",
+    "speed and motion characteristic",
+    "shape and geometric property",
+    "taste and flavor profile"
+  ],
+  "instructional": [
+    "emergency response procedure",
+    "sports competition rule",
+    "financial planning step",
+    "gardening and plant care",
+    "vehicle maintenance tip",
+    "food safety guideline",
+    "workplace safety procedure",
+    "travel preparation checklist",
+    "digital security practice",
+    "environmental recycling rule"
+  ]
+}

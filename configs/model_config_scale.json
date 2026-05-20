@@ -1,0 +1,31 @@
+{
+  "models": [
+    {
+      "name": "qwen_scale_25pct",
+      "mode": "hf_local",
+      "model_path": "/data/mingkai/neg/model/Qwen2.5-7B",
+      "device_map": "cuda:0",
+      "torch_dtype": "float16",
+      "trust_remote_code": false,
+      "adapter_path": "outputs/qwen_scale_25pct/adapter"
+    },
+    {
+      "name": "qwen_scale_50pct",
+      "mode": "hf_local",
+      "model_path": "/data/mingkai/neg/model/Qwen2.5-7B",
+      "device_map": "cuda:0",
+      "torch_dtype": "float16",
+      "trust_remote_code": false,
+      "adapter_path": "outputs/qwen_scale_50pct/adapter"
+    },
+    {
+      "name": "qwen_scale_75pct",
+      "mode": "hf_local",
+      "model_path": "/data/mingkai/neg/model/Qwen2.5-7B",
+      "device_map": "cuda:0",
+      "torch_dtype": "float16",
+      "trust_remote_code": false,
+      "adapter_path": "outputs/qwen_scale_75pct/adapter"
+    }
+  ]
+}
