@@ -45,6 +45,17 @@ def metric(summary: dict[str, Any], key: str) -> float:
     return 100.0 * float(value)
 
 
+def record_coverage(
+    result: dict[str, Any],
+    keep_ids: set[str],
+) -> tuple[list[dict[str, Any]], list[str]]:
+    records = result.get("per_record", [])
+    output_ids = {record.get("id") for record in records}
+    matched = [record for record in records if record.get("id") in keep_ids]
+    missing_ids = sorted(keep_ids - output_ids)
+    return matched, missing_ids
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--clean-input", required=True)
@@ -59,21 +70,25 @@ def main() -> None:
     for output_path in args.outputs:
         payload = json.loads(Path(output_path).read_text(encoding="utf-8"))
         for model_name, result in payload.items():
+            matched_records, missing_ids = record_coverage(result, keep_ids)
             per_record = [
                 normalize_item(r, clean_records[r["id"]])
-                for r in result.get("per_record", [])
-                if r.get("id") in keep_ids
+                for r in matched_records
             ]
             summary = aggregate_results(per_record)
             reagg[f"{Path(output_path).name}:{model_name}"] = {
                 "source": output_path,
                 "model_name": model_name,
+                "n_clean_records": len(keep_ids),
                 "n_records": len(per_record),
+                "n_missing_clean_records": len(missing_ids),
+                "missing_clean_record_ids": missing_ids,
                 "summary": summary,
             }
             print(
                 f"{Path(output_path).name}:{model_name} "
-                f"n={len(per_record)} "
+                f"n={len(per_record)}/{len(keep_ids)} "
+                f"missing_clean={len(missing_ids)} "
                 f"FlipAcc={metric(summary, 'FlipAcc'):.1f} "
                 f"ScopeCtrl={metric(summary, 'ScopeControlAcc'):.1f} "
                 f"NegRank={metric(summary, 'NegRankAcc'):.1f} "
