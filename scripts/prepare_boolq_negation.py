@@ -6,6 +6,7 @@ Outputs:
 """
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import sys
@@ -45,14 +46,40 @@ def make_record(row: dict, split: str, idx: int) -> dict:
     }
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Prepare BoolQ JSONL files used by raw and PMI BoolQ evaluation. "
+            "This command downloads/loads the BoolQ dataset only after CLI "
+            "arguments are parsed, so --help is safe in offline environments."
+        )
+    )
+    parser.add_argument(
+        "--neg-output",
+        default=str(NEG_OUTPUT),
+        help="Output JSONL for negation questions from train+validation.",
+    )
+    parser.add_argument(
+        "--full-output",
+        default=str(FULL_OUTPUT),
+        help="Output JSONL for the full validation set.",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
+    neg_output = Path(args.neg_output)
+    full_output = Path(args.full_output)
+
     try:
         from datasets import load_dataset
     except ImportError as exc:
         print(f"datasets not available: {exc}", file=sys.stderr)
         sys.exit(1)
 
-    NEG_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    neg_output.parent.mkdir(parents=True, exist_ok=True)
+    full_output.parent.mkdir(parents=True, exist_ok=True)
 
     # Negation subset: train + validation
     neg_records = []
@@ -63,18 +90,18 @@ def main() -> None:
             if rec["has_negation"]:
                 neg_records.append(rec)
 
-    with NEG_OUTPUT.open("w", encoding="utf-8") as fh:
+    with neg_output.open("w", encoding="utf-8") as fh:
         for rec in neg_records:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    print(f"BoolQ negation subset (train+val): {len(neg_records)} questions → {NEG_OUTPUT}")
+    print(f"BoolQ negation subset (train+val): {len(neg_records)} questions → {neg_output}")
 
     # Full validation set
     ds_val = load_dataset("boolq", split="validation")
     full_records = [make_record(row, "validation", idx) for idx, row in enumerate(ds_val)]
-    with FULL_OUTPUT.open("w", encoding="utf-8") as fh:
+    with full_output.open("w", encoding="utf-8") as fh:
         for rec in full_records:
             fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
-    print(f"BoolQ full validation: {len(full_records)} questions → {FULL_OUTPUT}")
+    print(f"BoolQ full validation: {len(full_records)} questions → {full_output}")
 
 
 if __name__ == "__main__":
