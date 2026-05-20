@@ -35,7 +35,6 @@ codex_exec() {
 
   "$CODEX_BIN" exec \
     -C "$worktree" \
-    -a never \
     --sandbox workspace-write \
     "${extra_args[@]}" \
     "$prompt" 2>&1 | tee "$log_file"
