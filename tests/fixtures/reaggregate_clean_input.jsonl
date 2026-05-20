@@ -1,0 +1,2 @@
+{"id":"select-hard-ok","expected_neg_behavior":"select_gold_neg","semantic_mode":"exclusive_choice","scope_type":"in_scope","gold_neg":[" banana"],"valid_negatives":[]}
+{"id":"select-multi-ok","expected_neg_behavior":"select_gold_neg","semantic_mode":"exclusive_choice","scope_type":"in_scope","gold_neg":[" pear"],"valid_negatives":[" plum"]}

@@ -1,0 +1,29 @@
+{
+  "toy_model": {
+    "summary": {},
+    "per_record": [
+      {
+        "id": "select-hard-ok",
+        "expected_neg_behavior": "select_gold_neg",
+        "pos_correct": true,
+        "neg_best": " banana",
+        "neg_rank_correct": true,
+        "neg_correct": true,
+        "flip_required": true,
+        "flip_correct": true,
+        "distractor_reject": true
+      },
+      {
+        "id": "select-multi-ok",
+        "expected_neg_behavior": "select_gold_neg",
+        "pos_correct": true,
+        "neg_best": " plum",
+        "neg_rank_correct": false,
+        "neg_correct": false,
+        "flip_required": true,
+        "flip_correct": false,
+        "distractor_reject": true
+      }
+    ]
+  }
+}
