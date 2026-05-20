@@ -12,8 +12,12 @@ from neg_blindness.evaluation import aggregate_results, evaluate_record
 from neg_blindness.io_utils import load_records, write_json
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
+def build_parser(
+    description: str | None = None,
+    epilog: str | None = None,
+    include_multi_answer_flag: bool = True,
+) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=description, epilog=epilog)
     parser.add_argument("--models", required=True)
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
@@ -25,13 +29,16 @@ def main() -> None:
              "Use 'auto' to pick [SUPPRESS]/[SELECT]/[PRESERVE] from expected_neg_behavior, "
              "or a fixed string like '[SUPPRESS]' for out-of-domain sets (e.g. WikiFact).",
     )
-    parser.add_argument(
-        "--use-multi-answer-negatives",
-        action="store_true",
-        help="Count record.valid_negatives as correct for select_gold_neg records.",
-    )
-    args = parser.parse_args()
+    if include_multi_answer_flag:
+        parser.add_argument(
+            "--use-multi-answer-negatives",
+            action="store_true",
+            help="Count record.valid_negatives as correct for select_gold_neg records.",
+        )
+    return parser
 
+
+def run_evaluation(args: argparse.Namespace) -> None:
     _AUTO_TOKENS = {
         "suppress_target":   "[SUPPRESS]",
         "select_gold_neg":   "[SELECT]",
@@ -64,7 +71,7 @@ def main() -> None:
                 config,
                 cache=cache,
                 neg_prefix=resolve_prefix(record),
-                use_multi_answer_negatives=args.use_multi_answer_negatives,
+                use_multi_answer_negatives=getattr(args, "use_multi_answer_negatives", False),
             )
             for record in records
         ]
@@ -74,6 +81,12 @@ def main() -> None:
         }
 
     write_json(args.output, output)
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    run_evaluation(args)
 
 
 if __name__ == "__main__":
