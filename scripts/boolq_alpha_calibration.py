@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from numbers import Real
 import random
 from pathlib import Path
 from statistics import mean, pstdev
@@ -18,6 +19,99 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.append(str(ROOT / "src"))
 
 from neg_blindness.metrics import bootstrap_ci
+
+
+LABELS = ("Yes", "No")
+
+
+def is_number(value: object) -> bool:
+    return isinstance(value, Real) and not isinstance(value, bool)
+
+
+def require_probability_record(record: dict, idx: int) -> None:
+    missing = [key for key in ("id", "gold_answer", "scores") if key not in record]
+    if missing:
+        raise ValueError(f"raw record #{idx} is missing required keys: {missing}")
+    if record["gold_answer"] not in LABELS:
+        raise ValueError(
+            f"raw record {record.get('id', idx)!r} has unsupported gold_answer "
+            f"{record['gold_answer']!r}; expected one of {LABELS}"
+        )
+    scores = record["scores"]
+    if not isinstance(scores, dict):
+        raise ValueError(f"raw record {record['id']!r} has non-object scores")
+    missing_scores = [label for label in LABELS if label not in scores]
+    if missing_scores:
+        raise ValueError(f"raw record {record['id']!r} is missing scores for {missing_scores}")
+    non_numeric = [label for label in LABELS if not is_number(scores[label])]
+    if non_numeric:
+        raise ValueError(f"raw record {record['id']!r} has non-numeric scores for {non_numeric}")
+
+
+def load_boolq_inputs(raw_eval: Path, pmi_eval: Path, model: str) -> tuple[list[dict], dict[str, float]]:
+    raw_payload = json.loads(raw_eval.read_text(encoding="utf-8"))
+    pmi_payload = json.loads(pmi_eval.read_text(encoding="utf-8"))
+    if not isinstance(raw_payload, dict):
+        raise ValueError("--raw-eval must contain a top-level JSON object keyed by model name")
+    if not isinstance(pmi_payload, dict):
+        raise ValueError("--pmi-eval must contain a top-level JSON object keyed by model name")
+
+    if model not in raw_payload:
+        available = ", ".join(sorted(raw_payload)) or "<none>"
+        raise ValueError(f"model {model!r} not found in --raw-eval; available: {available}")
+    if model not in pmi_payload:
+        available = ", ".join(sorted(pmi_payload)) or "<none>"
+        raise ValueError(f"model {model!r} not found in --pmi-eval; available: {available}")
+
+    records = raw_payload[model].get("per_record")
+    if not isinstance(records, list) or not records:
+        raise ValueError(f"--raw-eval model {model!r} must contain a non-empty per_record list")
+    for idx, record in enumerate(records):
+        if not isinstance(record, dict):
+            raise ValueError(f"raw record #{idx} is not a JSON object")
+        require_probability_record(record, idx)
+
+    prior = pmi_payload[model].get("prior")
+    if not isinstance(prior, dict):
+        raise ValueError(f"--pmi-eval model {model!r} must contain a prior object")
+    missing_prior = [label for label in LABELS if label not in prior]
+    if missing_prior:
+        raise ValueError(f"--pmi-eval model {model!r} prior is missing {missing_prior}")
+    non_numeric_prior = [label for label in LABELS if not is_number(prior[label])]
+    if non_numeric_prior:
+        raise ValueError(f"--pmi-eval model {model!r} prior has non-numeric values for {non_numeric_prior}")
+
+    return records, {label: float(prior[label]) for label in LABELS}
+
+
+def validate_args(records: list[dict], args: argparse.Namespace) -> list[int]:
+    if args.step <= 0:
+        raise ValueError("--step must be > 0")
+    if args.max_alpha < 0:
+        raise ValueError("--max-alpha must be >= 0")
+    if args.folds < 2:
+        raise ValueError("--folds must be >= 2")
+    if not 0 < args.calibration_ratio < 1:
+        raise ValueError("--calibration-ratio must be between 0 and 1")
+
+    counts = {label: sum(1 for record in records if record["gold_answer"] == label) for label in LABELS}
+    too_small = {label: count for label, count in counts.items() if count < 2}
+    if too_small:
+        raise ValueError(
+            "held-out calibration requires at least two examples for each label; "
+            f"got {too_small}"
+        )
+    min_label_count = min(counts.values())
+    if args.folds > min_label_count:
+        raise ValueError(
+            f"--folds ({args.folds}) cannot exceed the smallest label count "
+            f"({min_label_count}); counts={counts}"
+        )
+
+    heldout_seeds = [int(seed.strip()) for seed in args.heldout_seeds.split(",") if seed.strip()]
+    if not heldout_seeds:
+        raise ValueError("--heldout-seeds must contain at least one integer seed")
+    return heldout_seeds
 
 
 def predict(record: dict, prior: dict[str, float], alpha: float) -> str:
@@ -116,10 +210,11 @@ def main() -> None:
     parser.add_argument("--rescore-alpha", type=float)
     args = parser.parse_args()
 
-    raw_payload = json.loads(Path(args.raw_eval).read_text(encoding="utf-8"))
-    pmi_payload = json.loads(Path(args.pmi_eval).read_text(encoding="utf-8"))
-    records = raw_payload[args.model]["per_record"]
-    prior = pmi_payload[args.model]["prior"]
+    try:
+        records, prior = load_boolq_inputs(Path(args.raw_eval), Path(args.pmi_eval), args.model)
+        heldout_seeds = validate_args(records, args)
+    except (OSError, ValueError) as exc:
+        parser.error(str(exc))
 
     full_alpha, full_acc = best_alpha(records, prior, args.max_alpha, args.step)
     standard = {
@@ -146,7 +241,6 @@ def main() -> None:
         )
 
     heldout_rows = []
-    heldout_seeds = [int(seed.strip()) for seed in args.heldout_seeds.split(",") if seed.strip()]
     for split_seed in heldout_seeds:
         calibration_records, test_records = stratified_split(records, args.calibration_ratio, split_seed)
         alpha, calibration_acc = best_alpha(calibration_records, prior, args.max_alpha, args.step)
@@ -193,7 +287,7 @@ def main() -> None:
         if rescore_alpha is None:
             rescore_alpha = round(report["heldout_calibration"]["mean_alpha"], 2)
         rescored = {
-            args.model: rescore_records(raw_payload[args.model]["per_record"], prior, rescore_alpha)
+            args.model: rescore_records(records, prior, rescore_alpha)
         }
         rescored_path = Path(args.emit_rescored_output)
         rescored_path.parent.mkdir(parents=True, exist_ok=True)
