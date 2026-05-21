@@ -6,9 +6,9 @@ STATE="${NEG_AGENT_STATE:-/tmp/neg-agent-duo}"
 ITERATIONS="${NEG_AGENT_ITERATIONS:-forever}"
 SLEEP_SECONDS="${NEG_AGENT_SLEEP_SECONDS:-30}"
 CODEX_BIN="${CODEX_BIN:-codex}"
-CODEX_TIMEOUT_SECONDS="${NEG_AGENT_CODEX_TIMEOUT_SECONDS:-900}"
-CODEX_SANDBOX="${NEG_CODEX_SANDBOX:-workspace-write}"
-CODEX_APPROVAL="${NEG_CODEX_APPROVAL:-}"
+CODEX_TIMEOUT_SECONDS="${NEG_AGENT_CODEX_TIMEOUT_SECONDS:-7200}"
+CODEX_SANDBOX="${NEG_CODEX_SANDBOX:-danger-full-access}"
+CODEX_APPROVAL="${NEG_CODEX_APPROVAL:-never}"
 
 JUDGE_WORKTREES="$STATE/judge-worktrees"
 LOGS="$STATE/logs"
@@ -78,20 +78,28 @@ while [[ "$ITERATIONS" == "forever" || "$iteration" -lt "$ITERATIONS" ]]; do
   judge_log="$LOGS/${safe}_${commit:0:12}-judge.log"
   tmp_review="$review_file.tmp"
 
-  judge_prompt="$(cat <<PROMPT
+  judge_prompt="$(
+    cat <<'PROMPT'
 你是 judge。先读取 AGENTS.md，并严格按 Judge 角色工作。
 
 请评审 worker 分支：
-- branch: $branch
-- commit: $commit
-- artifact_dir: ${artifact_dir:-未提供}
-- canonical_repo: $REPO
+PROMPT
+    printf -- '- branch: %s\n' "$branch"
+    printf -- '- commit: %s\n' "$commit"
+    printf -- '- artifact_dir: %s\n' "${artifact_dir:-未提供}"
+    printf -- '- canonical_repo: %s\n' "$REPO"
+    cat <<'PROMPT'
 
 要求：
 1. 默认只评审，不直接修改代码。
 2. 重点检查这个改动回答了哪个研究问题、是否可信、是否存在数据泄漏、metric drift、缺 baseline、不可复现路径、大文件误入库。
 3. 对“完整实验包”按真实实验标准验收：检查是否实际运行了数据/模型/GPU评测或训练，是否有 JSON/CSV/日志产物，是否记录了 split、token 口径、模型名、命令和指标。
-4. 如 artifact_dir 存在，检查其中的关键产物；不要只看 git diff。真实数据和历史 outputs/model 可能只存在于 canonical_repo，不在临时 judge worktree 中；需要复查时使用绝对路径 `$REPO/data`、`$REPO/outputs`、`$REPO/model`。
+4. 如 artifact_dir 存在，检查其中的关键产物；不要只看 git diff。真实数据和历史 outputs/model 可能只存在于 canonical_repo，不在临时 judge worktree 中；需要复查时使用绝对路径。
+PROMPT
+    printf -- '   - `%s/data`\n' "$REPO"
+    printf -- '   - `%s/outputs`\n' "$REPO"
+    printf -- '   - `%s/model`\n' "$REPO"
+    cat <<'PROMPT'
 5. 运行必要验证；如果验证因依赖、GPU 或数据缺失无法运行，要写清楚 blocked 原因。
 6. 使用 origin/main...HEAD 查看 diff。
 7. 最终必须输出下面模板，第一行必须是结论。
@@ -116,7 +124,7 @@ while [[ "$ITERATIONS" == "forever" || "$iteration" -lt "$ITERATIONS" ]]; do
 下一步：
 - 给 worker 1-3 条具体、可执行任务。
 PROMPT
-)"
+  )"
 
   if codex_exec "$judge_worktree" "$judge_prompt" "$judge_log" > "$tmp_review"; then
     mv "$tmp_review" "$review_file"

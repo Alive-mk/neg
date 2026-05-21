@@ -8,9 +8,9 @@ ITERATIONS="${NEG_AGENT_ITERATIONS:-1}"
 MAX_REVISIONS="${NEG_AGENT_MAX_REVISIONS:-2}"
 SLEEP_SECONDS="${NEG_AGENT_SLEEP_SECONDS:-30}"
 CODEX_BIN="${CODEX_BIN:-codex}"
-CODEX_TIMEOUT_SECONDS="${NEG_AGENT_CODEX_TIMEOUT_SECONDS:-900}"
-CODEX_SANDBOX="${NEG_CODEX_SANDBOX:-workspace-write}"
-CODEX_APPROVAL="${NEG_CODEX_APPROVAL:-}"
+CODEX_TIMEOUT_SECONDS="${NEG_AGENT_CODEX_TIMEOUT_SECONDS:-7200}"
+CODEX_SANDBOX="${NEG_CODEX_SANDBOX:-danger-full-access}"
+CODEX_APPROVAL="${NEG_CODEX_APPROVAL:-never}"
 ARTIFACTS_DIR="${NEG_AGENT_ARTIFACTS_DIR:-$REPO/outputs/agent_duo}"
 
 WORKTREES="$STATE/worker-worktrees"
@@ -126,26 +126,41 @@ while [[ "$ITERATIONS" == "forever" || "$iteration" -lt "$ITERATIONS" ]]; do
   task_text="$(sed -n '1,240p' "$TASK_FILE" 2>/dev/null || true)"
   done_text="$(tail -n 260 "$DONE_FILE" 2>/dev/null || true)"
 
-  worker_prompt="$(cat <<PROMPT
+  worker_prompt="$(
+    cat <<'PROMPT'
 你是 worker。先读取 AGENTS.md，并严格按 Worker 角色工作。
 
 当前任务池：
-$task_text
+PROMPT
+    printf '%s\n' "$task_text"
+    cat <<'PROMPT'
 
 已完成/已阻塞记录：
-$done_text
+PROMPT
+    printf '%s\n' "$done_text"
+    cat <<'PROMPT'
 
 持久实验产物目录：
-$artifact_dir
+PROMPT
+    printf '%s\n' "$artifact_dir"
+    cat <<'PROMPT'
 
 真实数据/模型根目录：
-- repo_root: $REPO
-- data_root: $REPO/data
-- model_root: $REPO/model
-- existing_outputs_root: $REPO/outputs
+PROMPT
+    printf -- '- repo_root: %s\n' "$REPO"
+    printf -- '- data_root: %s/data\n' "$REPO"
+    printf -- '- model_root: %s/model\n' "$REPO"
+    printf -- '- existing_outputs_root: %s/outputs\n' "$REPO"
+    cat <<'PROMPT'
 - shared_model_root: /data/share/neg/model
 
-注意：当前工作目录是临时 git worktree，ignored 的 data/、outputs/、model/ 通常不会出现在 worktree 中。真实实验必须显式使用上面的绝对路径，例如 `--input $REPO/data/...`、`--output $artifact_dir/...`、`--cache-dir $artifact_dir/...`。不要因为临时 worktree 里没有 data/model 就判定实验 blocked。
+注意：当前工作目录是临时 git worktree，ignored 的 data/、outputs/、model/ 通常不会出现在 worktree 中。真实实验必须显式使用上面的绝对路径，例如：
+PROMPT
+    printf -- '- `--input %s/data/...`\n' "$REPO"
+    printf -- '- `--output %s/...`\n' "$artifact_dir"
+    printf -- '- `--cache-dir %s/...`\n' "$artifact_dir"
+    cat <<'PROMPT'
+不要因为临时 worktree 里没有 data/model 就判定实验 blocked。
 
 请自动选择一个完整、可验证、可提交的科研实验包。要求：
 1. 优先服务 P0；每轮围绕一个明确 RQ 完成“实验目标 -> 真实运行 -> 指标汇总 -> 风险判断 -> 下一步”闭环。
@@ -166,7 +181,7 @@ $artifact_dir
 是否存在风险：
 建议是否进入论文：
 PROMPT
-)"
+  )"
 
   if ! codex_exec "$worktree" "$worker_prompt" "$worker_log"; then
     log "codex worker failed; see $worker_log"
@@ -227,21 +242,28 @@ PROMPT
     fix_log="$LOGS/$safe-fix-$revision.log"
     review_text="$(sed -n '1,260p' "$review_file")"
 
-    fix_prompt="$(cat <<PROMPT
-你是 worker。judge 已经评审当前分支 $branch，并要求修改。请读取 AGENTS.md 和下面的 review，只做必要修复。
+    fix_prompt="$(
+      cat <<'PROMPT'
+你是 worker。judge 已经评审当前分支
+PROMPT
+      printf '%s\n' "$branch"
+      cat <<'PROMPT'
+并要求修改。请读取 AGENTS.md 和下面的 review，只做必要修复。
 
 Judge review：
-$review_text
+PROMPT
+      printf '%s\n' "$review_text"
+      cat <<'PROMPT'
 
 要求：
-1. 保持在当前分支 $branch。
+1. 保持在当前分支。
 2. 只修复 judge 指出的具体问题。
 3. 不要重写无关文件，不要使用 git add .。
 4. 运行最小相关验证。
 5. 不要自己 commit 或 push；外层 supervisor 会统一提交和推送。
 6. 最后按 Worker 产出模板说明结果。
 PROMPT
-)"
+    )"
 
     old_commit="$commit"
     if ! codex_exec "$worktree" "$fix_prompt" "$fix_log"; then
