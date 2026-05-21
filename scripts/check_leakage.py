@@ -96,6 +96,8 @@ def record_value(row: dict[str, Any], field: str) -> str:
         return first_text(
             row,
             [
+                ["source_record_id"],
+                ["metadata", "source_metadata", "source_id"],
                 ["metadata", "source_id"],
                 ["metadata", "release_id_renamed_from"],
                 ["id"],
