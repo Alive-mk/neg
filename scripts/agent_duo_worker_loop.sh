@@ -87,6 +87,13 @@ mark_idle() {
   printf 'state=idle\n' > "$PENDING_FILE"
 }
 
+review_conclusion() {
+  local review_file="$1"
+  grep -E '^结论：(通过|需要修改|阻塞)[[:space:]]*$' "$review_file" 2>/dev/null \
+    | tail -n 1 \
+    | sed 's/^结论：//'
+}
+
 stage_and_commit_if_needed() {
   local worktree="$1"
   local message="$2"
@@ -214,7 +221,9 @@ PROMPT
   while [[ "$revision" -le "$MAX_REVISIONS" ]]; do
     wait_for_review "$review_file"
 
-    if grep -q '^结论：通过' "$review_file"; then
+    conclusion="$(review_conclusion "$review_file")"
+
+    if [[ "$conclusion" == "通过" ]]; then
       log "judge passed $branch at $commit"
       {
         printf '\n## %s\n\n' "$branch"
@@ -225,6 +234,8 @@ PROMPT
       mark_idle
       break
     fi
+
+    log "judge conclusion for $branch at $commit: ${conclusion:-unrecognized}"
 
     if [[ "$revision" -ge "$MAX_REVISIONS" ]]; then
       log "max revisions reached for $branch"
