@@ -85,12 +85,13 @@ while [[ "$ITERATIONS" == "forever" || "$iteration" -lt "$ITERATIONS" ]]; do
 - branch: $branch
 - commit: $commit
 - artifact_dir: ${artifact_dir:-未提供}
+- canonical_repo: $REPO
 
 要求：
 1. 默认只评审，不直接修改代码。
 2. 重点检查这个改动回答了哪个研究问题、是否可信、是否存在数据泄漏、metric drift、缺 baseline、不可复现路径、大文件误入库。
 3. 对“完整实验包”按真实实验标准验收：检查是否实际运行了数据/模型/GPU评测或训练，是否有 JSON/CSV/日志产物，是否记录了 split、token 口径、模型名、命令和指标。
-4. 如 artifact_dir 存在，检查其中的关键产物；不要只看 git diff。
+4. 如 artifact_dir 存在，检查其中的关键产物；不要只看 git diff。真实数据和历史 outputs/model 可能只存在于 canonical_repo，不在临时 judge worktree 中；需要复查时使用绝对路径 `$REPO/data`、`$REPO/outputs`、`$REPO/model`。
 5. 运行必要验证；如果验证因依赖、GPU 或数据缺失无法运行，要写清楚 blocked 原因。
 6. 使用 origin/main...HEAD 查看 diff。
 7. 最终必须输出下面模板，第一行必须是结论。

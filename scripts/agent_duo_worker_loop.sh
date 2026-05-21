@@ -138,6 +138,15 @@ $done_text
 持久实验产物目录：
 $artifact_dir
 
+真实数据/模型根目录：
+- repo_root: $REPO
+- data_root: $REPO/data
+- model_root: $REPO/model
+- existing_outputs_root: $REPO/outputs
+- shared_model_root: /data/share/neg/model
+
+注意：当前工作目录是临时 git worktree，ignored 的 data/、outputs/、model/ 通常不会出现在 worktree 中。真实实验必须显式使用上面的绝对路径，例如 `--input $REPO/data/...`、`--output $artifact_dir/...`、`--cache-dir $artifact_dir/...`。不要因为临时 worktree 里没有 data/model 就判定实验 blocked。
+
 请自动选择一个完整、可验证、可提交的科研实验包。要求：
 1. 优先服务 P0；每轮围绕一个明确 RQ 完成“实验目标 -> 真实运行 -> 指标汇总 -> 风险判断 -> 下一步”闭环。
 2. 如果数据和模型存在，不要停留在 --help、py_compile 或文档整理；必须运行真实评测。必要时使用 GPU。若确实需要训练，可以启动有边界的训练并记录配置。
