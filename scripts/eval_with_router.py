@@ -12,6 +12,42 @@ from neg_blindness.api import ScoreCache, load_model_configs
 from neg_blindness.evaluation import aggregate_results, evaluate_record
 from neg_blindness.io_utils import load_records, write_json
 
+ALLOWED_TOKENS = {"", "[SUPPRESS]", "[SELECT]", "[PRESERVE]"}
+
+
+def validate_predictions(predictions, records, allow_missing_as_empty=False):
+    if not isinstance(predictions, dict):
+        raise SystemExit("router predictions must be a JSON object mapping record_id -> token")
+
+    invalid = {
+        str(record_id): token
+        for record_id, token in predictions.items()
+        if not isinstance(token, str) or token not in ALLOWED_TOKENS
+    }
+    if invalid:
+        examples = ", ".join(
+            f"{record_id}={token!r}"
+            for record_id, token in list(invalid.items())[:5]
+        )
+        raise SystemExit(
+            "router predictions contain unsupported tokens; allowed tokens are "
+            "'', '[SUPPRESS]', '[SELECT]', '[PRESERVE]'. "
+            f"Examples: {examples}"
+        )
+
+    if allow_missing_as_empty:
+        return
+
+    missing = [record.id for record in records if record.id not in predictions]
+    if missing:
+        examples = ", ".join(missing[:5])
+        raise SystemExit(
+            f"router predictions missing {len(missing)} input record ids. "
+            "Pass --allow-missing-as-empty only for an explicit no-token/empty-prefix policy. "
+            f"Examples: {examples}"
+        )
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--models",      required=True)
@@ -26,11 +62,17 @@ def main():
         action="store_true",
         help="Count record.valid_negatives as correct for select_gold_neg records.",
     )
+    parser.add_argument(
+        "--allow-missing-as-empty",
+        action="store_true",
+        help="Treat missing prediction ids as an empty prefix. Use only for explicit no-token/empty-prefix policies.",
+    )
     args = parser.parse_args()
 
     predictions = json.loads(Path(args.predictions).read_text())
     configs  = load_model_configs(args.models)
     records  = load_records(args.input)
+    validate_predictions(predictions, records, args.allow_missing_as_empty)
 
     selected = args.model_names or [
         n for n, c in configs.items()
