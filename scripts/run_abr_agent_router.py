@@ -10,7 +10,9 @@ import json
 import os
 import re
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from hashlib import sha1
 from pathlib import Path
 from typing import Any
@@ -247,17 +249,32 @@ def append_cache(path: Path | None, key: str, raw_response: str) -> None:
         handle.write(json.dumps({"key": key, "raw_response": raw_response}, ensure_ascii=False) + "\n")
 
 
-def route_record(record: dict[str, Any], args: argparse.Namespace, cache: dict[str, str]) -> dict[str, Any]:
+def route_record(
+    record: dict[str, Any],
+    args: argparse.Namespace,
+    cache: dict[str, str],
+    cache_path: Path | None,
+    cache_lock: threading.Lock | None = None,
+) -> dict[str, Any]:
     prompt = build_router_prompt(record, args.mode)
     key = cache_key(record, args.mode, args)
-    raw_response = cache.get(key)
+    if cache_lock:
+        with cache_lock:
+            raw_response = cache.get(key)
+    else:
+        raw_response = cache.get(key)
     if raw_response is None:
         if args.dry_run_rule_router:
             raw_response = json.dumps(dry_run_rule_route(record, args.mode), ensure_ascii=False)
         else:
             raw_response = call_openai_compatible(prompt, args)
-        cache[key] = raw_response
-        append_cache(Path(args.cache) if args.cache else None, key, raw_response)
+        if cache_lock:
+            with cache_lock:
+                cache[key] = raw_response
+                append_cache(cache_path, key, raw_response)
+        else:
+            cache[key] = raw_response
+            append_cache(cache_path, key, raw_response)
 
     pred_behavior, confidence, rationale, parsed = parse_router_response(raw_response)
     out = {
@@ -276,6 +293,37 @@ def route_record(record: dict[str, Any], args: argparse.Namespace, cache: dict[s
     return out
 
 
+def route_with_retries(
+    record: dict[str, Any],
+    args: argparse.Namespace,
+    cache: dict[str, str],
+    cache_path: Path | None,
+    cache_lock: threading.Lock | None = None,
+) -> dict[str, Any]:
+    last_error: Exception | None = None
+    for attempt in range(3):
+        try:
+            return route_record(record, args, cache, cache_path, cache_lock)
+        except (HTTPError, URLError, TimeoutError, RuntimeError, KeyError, json.JSONDecodeError) as exc:
+            last_error = exc
+            if attempt < 2:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+    raw = f"ROUTER_ERROR: {last_error}"
+    return {
+        "id": record.get("id"),
+        "prompt": record.get("prompt", ""),
+        "candidate_pool": record.get("candidate_pool", []),
+        "gold_behavior": record.get("gold_behavior", ""),
+        "pred_behavior": "PARSE_ERROR",
+        "confidence": None,
+        "rationale": "",
+        "raw_response": raw,
+        "mode": args.mode,
+        "parse_error": True,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
@@ -290,6 +338,12 @@ def main() -> None:
     parser.add_argument("--max-tokens", type=int, default=160)
     parser.add_argument("--sleep", type=float, default=0.0)
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of concurrent router requests. Use 1 for strictly serial calls.",
+    )
     parser.add_argument("--cache", default=None)
     parser.add_argument("--parse-errors", default="outputs/abr_router_preexp/parse_errors.jsonl")
     args = parser.parse_args()
@@ -300,45 +354,42 @@ def main() -> None:
     records = read_jsonl(Path(args.input))
     if args.limit is not None:
         records = records[: args.limit]
-    cache = load_cache(Path(args.cache) if args.cache else None)
+    cache_path = Path(args.cache) if args.cache else None
+    cache = load_cache(cache_path)
+    cache_lock = threading.Lock()
 
     outputs: list[dict[str, Any]] = []
     parse_errors: list[dict[str, Any]] = []
-    for idx, record in enumerate(records, start=1):
-        last_error: Exception | None = None
-        for attempt in range(3):
-            try:
-                out = route_record(record, args, cache)
-                outputs.append(out)
+    if args.workers <= 1:
+        for idx, record in enumerate(records, start=1):
+            out = route_with_retries(record, args, cache, cache_path, cache_lock)
+            outputs.append(out)
+            if out.get("parse_error"):
+                parse_errors.append(out)
+                print(f"Router failed for {record.get('id')}: {out.get('raw_response')}", file=sys.stderr)
+            if args.sleep:
+                time.sleep(args.sleep)
+            if idx % 50 == 0:
+                print(f"Routed {idx}/{len(records)}", flush=True)
+    else:
+        by_id: dict[str, dict[str, Any]] = {}
+        with ThreadPoolExecutor(max_workers=args.workers) as executor:
+            futures = {
+                executor.submit(route_with_retries, record, args, cache, cache_path, cache_lock): record
+                for record in records
+            }
+            for idx, future in enumerate(as_completed(futures), start=1):
+                record = futures[future]
+                out = future.result()
+                by_id[str(record.get("id"))] = out
                 if out.get("parse_error"):
                     parse_errors.append(out)
-                break
-            except (HTTPError, URLError, TimeoutError, RuntimeError, KeyError, json.JSONDecodeError) as exc:
-                last_error = exc
-                if attempt < 2:
-                    time.sleep(1.5 * (attempt + 1))
-                    continue
-                raw = f"ROUTER_ERROR: {exc}"
-                out = {
-                    "id": record.get("id"),
-                    "prompt": record.get("prompt", ""),
-                    "candidate_pool": record.get("candidate_pool", []),
-                    "gold_behavior": record.get("gold_behavior", ""),
-                    "pred_behavior": "PARSE_ERROR",
-                    "confidence": None,
-                    "rationale": "",
-                    "raw_response": raw,
-                    "mode": args.mode,
-                    "parse_error": True,
-                }
-                outputs.append(out)
-                parse_errors.append(out)
-        if args.sleep:
-            time.sleep(args.sleep)
-        if idx % 50 == 0:
-            print(f"Routed {idx}/{len(records)}", flush=True)
-        if last_error and outputs[-1].get("pred_behavior") == "PARSE_ERROR":
-            print(f"Router failed for {record.get('id')}: {last_error}", file=sys.stderr)
+                    print(f"Router failed for {record.get('id')}: {out.get('raw_response')}", file=sys.stderr)
+                if idx % 50 == 0:
+                    print(f"Routed {idx}/{len(records)}", flush=True)
+                if args.sleep:
+                    time.sleep(args.sleep)
+        outputs = [by_id[str(record.get("id"))] for record in records]
 
     write_jsonl(Path(args.output), outputs)
     if parse_errors:
