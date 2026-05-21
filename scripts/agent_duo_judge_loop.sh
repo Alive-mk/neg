@@ -7,6 +7,8 @@ ITERATIONS="${NEG_AGENT_ITERATIONS:-forever}"
 SLEEP_SECONDS="${NEG_AGENT_SLEEP_SECONDS:-30}"
 CODEX_BIN="${CODEX_BIN:-codex}"
 CODEX_TIMEOUT_SECONDS="${NEG_AGENT_CODEX_TIMEOUT_SECONDS:-900}"
+CODEX_SANDBOX="${NEG_CODEX_SANDBOX:-workspace-write}"
+CODEX_APPROVAL="${NEG_CODEX_APPROVAL:-}"
 
 JUDGE_WORKTREES="$STATE/judge-worktrees"
 LOGS="$STATE/logs"
@@ -27,16 +29,21 @@ codex_exec() {
   local worktree="$1"
   local prompt="$2"
   local log_file="$3"
+  local top_args=()
   local extra_args=()
+
+  if [[ -n "$CODEX_APPROVAL" ]]; then
+    top_args+=(--ask-for-approval "$CODEX_APPROVAL")
+  fi
 
   if [[ -n "${NEG_CODEX_EXTRA_ARGS:-}" ]]; then
     # shellcheck disable=SC2206
     extra_args=(${NEG_CODEX_EXTRA_ARGS})
   fi
 
-  timeout "$CODEX_TIMEOUT_SECONDS" "$CODEX_BIN" exec \
+  timeout "$CODEX_TIMEOUT_SECONDS" "$CODEX_BIN" "${top_args[@]}" exec \
     -C "$worktree" \
-    --sandbox workspace-write \
+    --sandbox "$CODEX_SANDBOX" \
     "${extra_args[@]}" \
     "$prompt" 2>&1 | tee "$log_file"
 }
@@ -49,6 +56,7 @@ while [[ "$ITERATIONS" == "forever" || "$iteration" -lt "$ITERATIONS" ]]; do
   branch="$(field_from_pending branch || true)"
   commit="$(field_from_pending commit || true)"
   safe="$(field_from_pending safe || true)"
+  artifact_dir="$(field_from_pending artifact_dir || true)"
   review_file="$(field_from_pending review_file || true)"
 
   if [[ "$state" != "pending" || -z "$branch" || -z "$commit" || -z "$safe" || -z "$review_file" ]]; then
@@ -76,13 +84,16 @@ while [[ "$ITERATIONS" == "forever" || "$iteration" -lt "$ITERATIONS" ]]; do
 请评审 worker 分支：
 - branch: $branch
 - commit: $commit
+- artifact_dir: ${artifact_dir:-未提供}
 
 要求：
 1. 默认只评审，不直接修改代码。
 2. 重点检查这个改动回答了哪个研究问题、是否可信、是否存在数据泄漏、metric drift、缺 baseline、不可复现路径、大文件误入库。
-3. 运行轻量验证；如果验证因依赖、GPU 或数据缺失无法运行，要写清楚 blocked 原因。
-4. 使用 origin/main...HEAD 查看 diff。
-5. 最终必须输出下面模板，第一行必须是结论。
+3. 对“完整实验包”按真实实验标准验收：检查是否实际运行了数据/模型/GPU评测或训练，是否有 JSON/CSV/日志产物，是否记录了 split、token 口径、模型名、命令和指标。
+4. 如 artifact_dir 存在，检查其中的关键产物；不要只看 git diff。
+5. 运行必要验证；如果验证因依赖、GPU 或数据缺失无法运行，要写清楚 blocked 原因。
+6. 使用 origin/main...HEAD 查看 diff。
+7. 最终必须输出下面模板，第一行必须是结论。
 
 模板：
 结论：通过 / 需要修改 / 阻塞

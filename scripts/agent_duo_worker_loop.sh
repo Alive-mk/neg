@@ -9,6 +9,9 @@ MAX_REVISIONS="${NEG_AGENT_MAX_REVISIONS:-2}"
 SLEEP_SECONDS="${NEG_AGENT_SLEEP_SECONDS:-30}"
 CODEX_BIN="${CODEX_BIN:-codex}"
 CODEX_TIMEOUT_SECONDS="${NEG_AGENT_CODEX_TIMEOUT_SECONDS:-900}"
+CODEX_SANDBOX="${NEG_CODEX_SANDBOX:-workspace-write}"
+CODEX_APPROVAL="${NEG_CODEX_APPROVAL:-}"
+ARTIFACTS_DIR="${NEG_AGENT_ARTIFACTS_DIR:-$REPO/outputs/agent_duo}"
 
 WORKTREES="$STATE/worker-worktrees"
 REVIEWS="$STATE/reviews"
@@ -20,8 +23,9 @@ mkdir -p "$STATE" "$WORKTREES" "$REVIEWS" "$LOGS"
 
 if [[ ! -f "$TASK_FILE" ]]; then
   cat > "$TASK_FILE" <<'TASK'
-按照 AGENTS.md 的当前优先级，自动选择一个最小、可验证、可提交的科研推进任务。
-优先从 P0 开始；一次只做一个 bounded step；不要为了扩大范围而重构无关文件。
+按照 AGENTS.md 的当前优先级，自动选择一个完整、可验证、可提交的科研实验包。
+优先从 P0 开始；每轮必须尽量完成“实验目标 -> 真实运行 -> 指标汇总 -> 风险判断 -> 下一步”的闭环。
+如果数据和模型存在，不要停留在 --help、py_compile 或文档整理；必要时使用 GPU 跑真实评测或训练。
 TASK
 fi
 
@@ -33,16 +37,21 @@ codex_exec() {
   local worktree="$1"
   local prompt="$2"
   local log_file="$3"
+  local top_args=()
   local extra_args=()
+
+  if [[ -n "$CODEX_APPROVAL" ]]; then
+    top_args+=(--ask-for-approval "$CODEX_APPROVAL")
+  fi
 
   if [[ -n "${NEG_CODEX_EXTRA_ARGS:-}" ]]; then
     # shellcheck disable=SC2206
     extra_args=(${NEG_CODEX_EXTRA_ARGS})
   fi
 
-  timeout "$CODEX_TIMEOUT_SECONDS" "$CODEX_BIN" exec \
+  timeout "$CODEX_TIMEOUT_SECONDS" "$CODEX_BIN" "${top_args[@]}" exec \
     -C "$worktree" \
-    --sandbox workspace-write \
+    --sandbox "$CODEX_SANDBOX" \
     "${extra_args[@]}" \
     "$prompt" 2>&1 | tee "$log_file"
 }
@@ -51,6 +60,7 @@ write_pending_review() {
   local branch="$1"
   local commit="$2"
   local safe="$3"
+  local artifact_dir="$4"
   local review_file="$REVIEWS/${safe}_${commit:0:12}.md"
 
   {
@@ -58,6 +68,7 @@ write_pending_review() {
     printf 'branch=%s\n' "$branch"
     printf 'commit=%s\n' "$commit"
     printf 'safe=%s\n' "$safe"
+    printf 'artifact_dir=%s\n' "$artifact_dir"
     printf 'review_file=%s\n' "$review_file"
   } > "$PENDING_FILE.tmp"
   mv "$PENDING_FILE.tmp" "$PENDING_FILE"
@@ -104,14 +115,16 @@ while [[ "$ITERATIONS" == "forever" || "$iteration" -lt "$ITERATIONS" ]]; do
   safe="${branch//\//__}"
   worktree="$WORKTREES/$safe"
   worker_log="$LOGS/$safe-worker.log"
+  artifact_dir="$ARTIFACTS_DIR/$safe"
 
   log "starting iteration $iteration on $branch"
 
   git -C "$REPO" fetch origin
   git -C "$REPO" worktree add -b "$branch" "$worktree" origin/main
+  mkdir -p "$artifact_dir"
 
   task_text="$(sed -n '1,240p' "$TASK_FILE" 2>/dev/null || true)"
-  done_text="$(sed -n '1,240p' "$DONE_FILE" 2>/dev/null || true)"
+  done_text="$(tail -n 260 "$DONE_FILE" 2>/dev/null || true)"
 
   worker_prompt="$(cat <<PROMPT
 你是 worker。先读取 AGENTS.md，并严格按 Worker 角色工作。
@@ -122,13 +135,17 @@ $task_text
 已完成/已阻塞记录：
 $done_text
 
-请自动选择一个最小、可验证、可提交的科研推进任务。要求：
-1. 一次只做一个 bounded step，优先服务 P0。
-2. 先解释原因，再执行修复或补充。
-3. 只提交和本任务相关的文件，不要使用 git add .。
-4. 不要提交 data/、outputs/、model/、cache、checkpoint 或大量日志，除非任务明确要求 release artifact。
-5. 运行最小相关验证；如果验证因依赖或资源受限失败，要写清楚。
-6. 不要自己 commit 或 push；外层 supervisor 会统一提交和推送。
+持久实验产物目录：
+$artifact_dir
+
+请自动选择一个完整、可验证、可提交的科研实验包。要求：
+1. 优先服务 P0；每轮围绕一个明确 RQ 完成“实验目标 -> 真实运行 -> 指标汇总 -> 风险判断 -> 下一步”闭环。
+2. 如果数据和模型存在，不要停留在 --help、py_compile 或文档整理；必须运行真实评测。必要时使用 GPU。若确实需要训练，可以启动有边界的训练并记录配置。
+3. GPU/PyTorch 命令可以直接运行；本轮 supervisor 已按需要提供非 sandbox 权限。优先使用已存在脚本，例如 eval_clean_strict.py、eval_with_router.py、check_leakage.py、eval_boolq_pmi.py、evaluate_mmlu.py。
+4. 实验输出、cache、模型产物不要提交到 git。需要保留的 JSON/CSV/日志写入或复制到上面的持久实验产物目录，并在进展日志中记录路径。
+5. 只提交和本任务相关的代码、配置、轻量测试、进展日志；不要使用 git add .。
+6. 如果完整实验因数据、模型、GPU、依赖或时间阻塞，必须先尝试可行替代实验，并把 blocked 原因写清楚。
+7. 不要自己 commit 或 push；外层 supervisor 会统一提交和推送。
 
 结束时必须输出：
 分支名：
@@ -167,7 +184,7 @@ PROMPT
 
   git -C "$worktree" push -u origin HEAD
   commit="$(git -C "$worktree" rev-parse HEAD)"
-  review_file="$(write_pending_review "$branch" "$commit" "$safe")"
+  review_file="$(write_pending_review "$branch" "$commit" "$safe" "$artifact_dir")"
 
   revision=0
   while [[ "$revision" -le "$MAX_REVISIONS" ]]; do
@@ -232,7 +249,7 @@ PROMPT
     fi
 
     git -C "$worktree" push -u origin HEAD
-    review_file="$(write_pending_review "$branch" "$commit" "$safe")"
+    review_file="$(write_pending_review "$branch" "$commit" "$safe" "$artifact_dir")"
   done
 
   sleep "$SLEEP_SECONDS"

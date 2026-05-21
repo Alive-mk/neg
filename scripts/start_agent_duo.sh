@@ -13,8 +13,9 @@ if [[ $# -gt 0 ]]; then
   printf '%s\n' "$*" > "$TASK_FILE"
 elif [[ ! -f "$TASK_FILE" ]]; then
   cat > "$TASK_FILE" <<'TASK'
-按照 AGENTS.md 的当前优先级，自动选择一个最小、可验证、可提交的科研推进任务。
-优先从 P0 开始；一次只做一个 bounded step；不要为了扩大范围而重构无关文件。
+按照 AGENTS.md 的当前优先级，自动选择一个完整、可验证、可提交的科研实验包。
+优先从 P0 开始；每轮必须尽量完成“实验目标 -> 真实运行 -> 指标汇总 -> 风险判断 -> 下一步”的闭环。
+如果数据和模型存在，不要停留在 --help、py_compile 或文档整理；必要时使用 GPU 跑真实评测或训练。
 TASK
 fi
 
